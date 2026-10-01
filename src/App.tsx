@@ -289,11 +289,20 @@ export default function App() {
             <div className={`orb ${status}`}>
               <span className="wave" /><span className="wave w2" /><span className="wave w3" />
               <span className="ring" /><span className="ring r2" />
-              <button className="power" onClick={toggle} disabled={!!busy && status !== 'connected'} title={status === 'connected' ? T.disconnect : T.connect}>
-                <svg viewBox="0 0 24 24"><path d="M12 3v8" /><path d="M6.3 6.8a8 8 0 1 0 11.4 0" /></svg>
+              <button className="power" onClick={toggle} disabled={!!busy && status !== 'connected'} title={status === 'connected' ? T.disconnect : T.connect} aria-label={status === 'connected' ? T.disconnect : status === 'connecting' ? T.connecting : T.connect}>
+                {status === 'connected' ? (
+                  <span className="heart-wrap" aria-hidden="true">
+                    <svg className="heart-icon" viewBox="0 0 24 24"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78Z" /></svg>
+                    <span className="heart-glint" />
+                  </span>
+                ) : status === 'connecting' ? (
+                  <span className="connect-loader" aria-hidden="true"><i /><i /><i /></span>
+                ) : (
+                  <svg className="power-icon" viewBox="0 0 24 24"><path d="M12 3v8" /><path d="M6.3 6.8a8 8 0 1 0 11.4 0" /></svg>
+                )}
               </button>
             </div>
-            <div className="status">{label}</div>
+            <div className={`status ${status}`} aria-live="polite"><span className="status-dot" />{label}</div>
             <div className="sub">
               {status === 'connected' && active ? (
                 <>{activeFlag?.cc && <span className="cc">{activeFlag.cc}</span>}<span dir="auto">{activeFlag?.label}</span> · <span className="mono">{fmtTime(now - since)}</span></>

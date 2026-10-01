@@ -1,4 +1,5 @@
 import type { VNode } from './parser';
+import { API_PORT } from './config';
 
 const clean = (o: any) => JSON.parse(JSON.stringify(o)); // undefined ها حذف میشن
 
@@ -44,6 +45,7 @@ export function buildConfig(node: VNode, mode: 'tun' | 'proxy', port: number) {
       auto_detect_interface: true,
       default_domain_resolver: 'dns-local',
     },
+    experimental: { clash_api: { external_controller: `127.0.0.1:${API_PORT}` } },
   });
 }
 

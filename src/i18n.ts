@@ -11,7 +11,7 @@ export const t = {
     noValid: 'هیچ کانفیگ معتبری پیدا نشد', dropped: 'اتصال قطع شد',
     adminTitle: 'حالت TUN دسترسی ادمین می‌خواد', adminText: 'برای تونل کردن کل سیستم، برنامه باید با Administrator اجرا بشه.',
     relaunch: 'اجرای دوباره با ادمین', useProxy: 'برو روی حالت Proxy', cancel: 'بیخیال',
-    timeout: 'تایم‌اوت', best: 'بهترین', current: 'سرور فعلی', autoPick: 'خودکار (بهترین پینگ)',
+    timeout: 'تایم‌اوت', down: 'دانلود', up: 'آپلود', total: 'مصرف', ip: 'IP شما', checking: 'در حال بررسی...', noNet: 'وصل شد ولی اینترنت جواب نمیده', sortPing: 'مرتب‌سازی با پینگ', search: 'جستجوی سرور...', best: 'بهترین', current: 'سرور فعلی', autoPick: 'خودکار (بهترین پینگ)',
   },
   en: {
     connect: 'Connect', disconnect: 'Disconnect', idle: 'Not connected', connecting: 'Connecting...', connected: 'Connected',
@@ -23,6 +23,6 @@ export const t = {
     noValid: 'No valid config found', dropped: 'Connection dropped',
     adminTitle: 'TUN mode needs admin', adminText: 'To tunnel the whole system, the app must run as Administrator.',
     relaunch: 'Restart as admin', useProxy: 'Use Proxy mode', cancel: 'Cancel',
-    timeout: 'timeout', best: 'Best', current: 'Current server', autoPick: 'Auto (best ping)',
+    timeout: 'timeout', down: 'Download', up: 'Upload', total: 'Usage', ip: 'Your IP', checking: 'Checking...', noNet: 'Connected but no internet', sortPing: 'Sort by ping', search: 'Search servers...', best: 'Best', current: 'Current server', autoPick: 'Auto (best ping)',
   },
 };

@@ -14,6 +14,7 @@ use tauri::{AppHandle, Manager, RunEvent, State};
 use std::os::windows::process::CommandExt;
 
 const PROXY_PORT: u16 = 12334;
+const API_PORT: u16 = 12335;
 
 #[derive(Default)]
 struct Core {
@@ -336,6 +337,47 @@ async fn fetch_text(urls: Vec<String>) -> Result<String, String> {
     .map_err(err)?
 }
 
+/// ترافیک کل (آپلود، دانلود) از Clash API هسته‌ی اصلی
+#[tauri::command]
+async fn core_stats() -> Result<(u64, u64), String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(2)).build();
+        let s = agent
+            .get(&format!("http://127.0.0.1:{API_PORT}/connections"))
+            .call()
+            .map_err(err)?
+            .into_string()
+            .map_err(err)?;
+        let v: serde_json::Value = serde_json::from_str(&s).map_err(err)?;
+        Ok((
+            v["uploadTotal"].as_u64().unwrap_or(0),
+            v["downloadTotal"].as_u64().unwrap_or(0),
+        ))
+    })
+    .await
+    .map_err(err)?
+}
+
+/// IP و کشور خروجی، از داخل خود تونل (چک واقعی اتصال)
+#[tauri::command]
+async fn get_ip(port: u16) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let proxy = ureq::Proxy::new(format!("http://127.0.0.1:{port}")).map_err(err)?;
+        let agent = ureq::AgentBuilder::new()
+            .proxy(proxy)
+            .timeout(Duration::from_secs(8))
+            .build();
+        agent
+            .get("http://ip-api.com/json/?fields=status,query,country,countryCode")
+            .call()
+            .map_err(err)?
+            .into_string()
+            .map_err(err)
+    })
+    .await
+    .map_err(err)?
+}
+
 #[tauri::command]
 fn is_admin() -> bool {
     #[cfg(windows)]
@@ -387,7 +429,9 @@ fn main() {
             test_delays,
             fetch_text,
             is_admin,
-            relaunch_admin
+            relaunch_admin,
+            core_stats,
+            get_ip
         ])
         .build(tauri::generate_context!())
         .expect("failed to start MahyarVPN")

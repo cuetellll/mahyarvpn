@@ -12,5 +12,6 @@ export const SUB_URLS: string[] = [
 ];
 
 export const PROXY_PORT = 12334;
+export const API_PORT = 12335;
 export const TEST_URL = 'https://www.gstatic.com/generate_204';
 export const TEST_TIMEOUT = 5000;

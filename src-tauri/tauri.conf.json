@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "MahyarVPN",
   "mainBinaryName": "mahyarvpn",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "identifier": "com.mahyar.vpn",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -15,13 +15,13 @@
       {
         "label": "main",
         "title": "MahyarVPN",
-        "width": 440,
-        "height": 780,
+        "width": 1080,
+        "height": 700,
         "resizable": true,
         "maximizable": true,
         "decorations": false,
         "center": true,
-        "minWidth": 380,
+        "minWidth": 420,
         "minHeight": 640
       }
     ],

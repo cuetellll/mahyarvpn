@@ -76,3 +76,29 @@ npm run tauri dev
 - سرعت لحظه‌ای دانلود/آپلود، مصرف کل و نمایش IP و کشور خروجی (چک واقعی اینترنت بعد از اتصال)
 - نمایش کد کشور به‌جای ایموجی پرچم (ویندوز پرچم نشون نمیده)
 - جستجو و مرتب‌سازی سرورها بر اساس پینگ، نوار کیفیت پینگ، انیمیشن‌های بیشتر
+
+## v2.1 changes
+- Home: connect button moved to the center under the globe (bigger, with a label), status and timer centered under it.
+- Globe: real continents (Natural Earth land mask, `src/land.ts`), orbit ring now goes behind the planet, thinner atmosphere, background stars, calmer background.
+- System tray: minimize / X hides to tray. Left-click the tray icon = open, right-click = connect/disconnect, open, quit. The icon gets a green dot when connected. Full exit: tray menu > Quit.
+
+## v2.2 changes
+- New connect icon: power glyph draws in, spins while connecting, morphs to a shield + check when connected.
+- Animated wavy MAHYARVPN title at the top of the dashboard (VPN part turns green when connected).
+- Single instance (tauri-plugin-single-instance): launching again just brings the window back.
+- Start with Windows (tauri-plugin-autostart, starts hidden in tray) + Auto-connect toggle in Settings.
+- Windows notification on connect/disconnect while hidden in tray (tauri-plugin-notification).
+- Empty-state card on the dashboard when there are no configs; duplicate status chip removed.
+
+## v2.3 · اسکن هوشمند ساب‌های عمومی
+- **ساب عمومی** (پیش‌فرض: `4n0nymou3/multi-proxy-config-fetcher`، با میرور jsDelivr) کنار ساب شخصی خودت
+- همه‌ی کانفیگ‌های ساب عمومی نمیاد تو برنامه: با **اینترنت خود کاربر** تست میشن و فقط **۱۰ تای کم‌پینگ** نگه داشته میشه (۵/۱۰/۱۵/۲۰ از تنظیمات)
+- اسکن دو مرحله‌ای:
+  1. اتصال TCP موازی به همه (۱۲۸ تا همزمان) → مرده‌ها و فیلترشده‌ها حذف
+  2. تست HTTP واقعی از داخل تونل (sing-box) روی بهترین‌ها، با تنوع (حداکثر ۳ کانفیگ از یه سرور)
+- کانفیگ‌هایی که قطعاً خرابن (UUID غلط، رمز ss ناشناخته، reality بدون کلید) همون اول کنار میرن؛ اگه یه کانفیگ خراب کل یه دسته رو رد کنه، دسته نصف میشه تا فقط همون حذف بشه
+- اگه وسط اتصال TUN اسکن کنی، تونل موقتاً قطع میشه که تست با نت واقعی باشه و بعد خودش دوباره وصل میشه
+- **ساب دلخواه**: از تنظیمات لینک ساب اضافه کن، روشن/خاموش کن
+- **اسکن دوباره** (`Ctrl+R`): بدون دانلود مجدد، از همون استخر قبلی دوباره سریع‌ترین‌ها رو پیدا می‌کنه
+- UI: پنل زنده‌ی اسکن (قیف دریافت ← زنده ← تست واقعی ← برترین‌ها)، رتبه‌ی طلایی/نقره‌ای/برنزی روی کارت سرورها، پیل رنگی پینگ، گروه ابزار با tooltip، سه‌تا سریع‌ترین روی داشبورد برای اتصال یه‌کلیکی، فیلتر «برترین‌ها / شخصی»
+- علاقه‌مندی‌ها از ساب عمومی بعد از اسکن دوباره حذف نمیشن

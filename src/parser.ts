@@ -134,7 +134,7 @@ function parseVless(link: string): Omit<VNode, 'id' | 'link'> {
     name: name || `${server}:${port}`, protocol: 'vless', server, port,
     outbound: {
       type: 'vless', server, server_port: port, uuid: user,
-      flow: q.flow || undefined, packet_encoding: 'xudp',
+      flow: q.flow?.startsWith('xtls-rprx-vision') ? 'xtls-rprx-vision' : undefined, packet_encoding: 'xudp',
       tls: tls({ security: q.security, sni: q.sni || q.host, fp: q.fp, alpn: q.alpn, insecure: truthy(q.allowInsecure || q.insecure), pbk: q.pbk, sid: q.sid, server }),
       transport: transport(net, q.host, q.path, q.serviceName, q.headerType),
     },

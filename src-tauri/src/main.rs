@@ -8,7 +8,14 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use tauri::{AppHandle, Manager, RunEvent, State};
+use tauri::{
+    image::Image,
+    menu::{Menu, MenuItem, PredefinedMenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    AppHandle, Emitter, Manager, RunEvent, State, WindowEvent, Wry,
+};
+use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
+use tauri_plugin_notification::NotificationExt;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -235,7 +242,14 @@ fn core_running(core: State<'_, Core>) -> bool {
 /// تست پینگ واقعی: یه sing-box موقت با همه سرورها بالا میاد و از طریق
 /// Clash API برای هر سرور یه درخواست HTTP واقعی زده میشه
 #[tauri::command]
-async fn test_delays(app: AppHandle, config: String, count: usize, url: String, timeout: u32) -> Result<Vec<i64>, String> {
+async fn test_delays(
+    app: AppHandle,
+    config: String,
+    count: usize,
+    url: String,
+    timeout: u32,
+    concurrency: Option<usize>,
+) -> Result<Vec<i64>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let port = std::net::TcpListener::bind("127.0.0.1:0")
             .and_then(|l| l.local_addr())
@@ -276,10 +290,11 @@ async fn test_delays(app: AppHandle, config: String, count: usize, url: String, 
         }
 
         let enc = urlencode(&url);
+        let par = concurrency.unwrap_or(16).clamp(1, 64);
         let mut results = vec![-1i64; count];
         let mut i0 = 0;
         while i0 < count {
-            let end = (i0 + 16).min(count);
+            let end = (i0 + par).min(count);
             thread::scope(|s| {
                 let handles: Vec<_> = (i0..end)
                     .map(|i| {
@@ -306,6 +321,7 @@ async fn test_delays(app: AppHandle, config: String, count: usize, url: String, 
                 }
             });
             i0 = end;
+            let _ = app.emit("delay-progress", serde_json::json!({ "done": end, "total": count }));
         }
         let _ = child.kill();
         let _ = child.wait();
@@ -315,15 +331,81 @@ async fn test_delays(app: AppHandle, config: String, count: usize, url: String, 
     .map_err(err)?
 }
 
+#[derive(serde::Deserialize)]
+struct Target {
+    host: String,
+    port: u16,
+}
+
+/// مرحله‌ی اول اسکن هوشمند: اتصال TCP خام به هزاران سرور به‌صورت موازی.
+/// خروجی: زمان اتصال (ms) یا -1. سرورهای مرده/فیلترشده همین‌جا حذف میشن
+/// تا تست واقعی (که سنگین‌تره) فقط روی امیدوارکننده‌ها اجرا بشه.
+#[tauri::command]
+async fn tcp_ping(app: AppHandle, targets: Vec<Target>, timeout: u32, concurrency: usize) -> Result<Vec<i64>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+        use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
+        let n = targets.len();
+        if n == 0 {
+            return Ok(Vec::new());
+        }
+        let results: Vec<AtomicI64> = (0..n).map(|_| AtomicI64::new(-1)).collect();
+        let next = AtomicUsize::new(0);
+        let done = AtomicUsize::new(0);
+        let to = Duration::from_millis(timeout.max(200) as u64);
+        let workers = concurrency.clamp(1, 256).min(n);
+        let step = (n / 60).max(10);
+        thread::scope(|s| {
+            for _ in 0..workers {
+                s.spawn(|| loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    if i >= n {
+                        break;
+                    }
+                    let t = &targets[i];
+                    let addr: Option<SocketAddr> = (t.host.as_str(), t.port).to_socket_addrs().ok().and_then(|it| {
+                        let v: Vec<SocketAddr> = it.collect();
+                        v.iter().find(|a| a.is_ipv4()).or_else(|| v.first()).cloned()
+                    });
+                    let ms = addr
+                        .and_then(|a| {
+                            let st = Instant::now();
+                            TcpStream::connect_timeout(&a, to).ok().map(|_| (st.elapsed().as_millis() as i64).max(1))
+                        })
+                        .unwrap_or(-1);
+                    results[i].store(ms, Ordering::Relaxed);
+                    let d = done.fetch_add(1, Ordering::Relaxed) + 1;
+                    if d % step == 0 || d == n {
+                        let _ = app.emit("scan-progress", serde_json::json!({ "phase": "tcp", "done": d, "total": n }));
+                    }
+                });
+            }
+        });
+        Ok(results.into_iter().map(|a| a.into_inner()).collect())
+    })
+    .await
+    .map_err(err)?
+}
+
+/// بدنه‌ی پاسخ تا ۴۰ مگ (into_string سقف ۱۰ مگ داره؛ ساب‌های عمومی ممکنه بزرگ‌تر باشن)
+fn read_body(r: ureq::Response) -> std::io::Result<String> {
+    use std::io::Read;
+    let mut buf = String::new();
+    r.into_reader().take(40 * 1024 * 1024).read_to_string(&mut buf)?;
+    Ok(buf)
+}
+
 /// دریافت ساب‌اسکریپشن؛ آدرس‌ها به ترتیب امتحان میشن (اصلی، بعد میرور)
 #[tauri::command]
 async fn fetch_text(urls: Vec<String>) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(15)).build();
+        let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(25)).build();
         let mut errs = Vec::new();
         for u in urls {
+            // #fragment (اسم ساب) فرستاده نمیشه
+            let u = u.split('#').next().unwrap_or("").to_string();
             match agent.get(&u).set("User-Agent", "MahyarVPN/1.0").call() {
-                Ok(r) => match r.into_string() {
+                Ok(r) => match read_body(r) {
                     Ok(s) if !s.trim().is_empty() => return Ok(s),
                     Ok(_) => errs.push(format!("{u}: empty")),
                     Err(e) => errs.push(format!("{u}: {e}")),
@@ -400,7 +482,7 @@ fn relaunch_admin(app: AppHandle) -> Result<(), String> {
     kill_core(&core);
     let _ = set_proxy(&core, false, PROXY_PORT);
     let script = format!(
-        "Start-Process -FilePath '{}' -Verb RunAs",
+        "Start-Process -FilePath '{}' -ArgumentList '--elevated' -Verb RunAs",
         exe.display().to_string().replace('\'', "''")
     );
     let mut c = Command::new("powershell");
@@ -415,23 +497,203 @@ fn relaunch_admin(app: AppHandle) -> Result<(), String> {
     }
 }
 
+// ---------------- System tray ----------------
+/// آیتم‌های منوی راست‌کلیک tray که متنشون از سمت UI عوض میشه
+struct TrayMenu {
+    status: MenuItem<Wry>,
+    toggle: MenuItem<Wry>,
+    show: MenuItem<Wry>,
+    quit: MenuItem<Wry>,
+    icon_idle: Image<'static>,
+    icon_on: Image<'static>,
+}
+
+fn show_main_window(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.unminimize();
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+}
+
+/// یه نقطه‌ی رنگی گوشه‌ی پایین آیکون می‌کشه (سبز = وصل)
+fn badge(base: &Image<'_>, rgb: [u8; 3]) -> Image<'static> {
+    let (w, h) = (base.width(), base.height());
+    let mut px = base.rgba().to_vec();
+    let r = (w.min(h) as f32) * 0.24;
+    let (cx, cy) = (w as f32 - r - 1.0, h as f32 - r - 1.0);
+    for y in 0..h {
+        for x in 0..w {
+            let d = ((x as f32 + 0.5 - cx).powi(2) + (y as f32 + 0.5 - cy).powi(2)).sqrt();
+            let i = ((y * w + x) * 4) as usize;
+            if d <= r {
+                px[i] = rgb[0]; px[i + 1] = rgb[1]; px[i + 2] = rgb[2]; px[i + 3] = 255;
+            } else if d <= r + 1.5 {
+                px[i] = 4; px[i + 1] = 6; px[i + 2] = 15; px[i + 3] = 255; // حاشیه‌ی تیره دور نقطه
+            }
+        }
+    }
+    Image::new_owned(px, w, h)
+}
+
+fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
+    let h = app.handle();
+    let status = MenuItem::with_id(h, "status", "○ MahyarVPN", false, None::<&str>)?;
+    let toggle = MenuItem::with_id(h, "toggle", "Connect", true, None::<&str>)?;
+    let show = MenuItem::with_id(h, "show", "Open MahyarVPN", true, None::<&str>)?;
+    let quit = MenuItem::with_id(h, "quit", "Quit", true, None::<&str>)?;
+    let menu = Menu::with_items(
+        h,
+        &[
+            &status,
+            &PredefinedMenuItem::separator(h)?,
+            &toggle,
+            &show,
+            &PredefinedMenuItem::separator(h)?,
+            &quit,
+        ],
+    )?;
+
+    let base = app
+        .default_window_icon()
+        .cloned()
+        .ok_or_else(|| tauri::Error::AssetNotFound("window icon".into()))?;
+    let icon_idle = Image::new_owned(base.rgba().to_vec(), base.width(), base.height());
+    let icon_on = badge(&base, [16, 245, 168]);
+
+    TrayIconBuilder::with_id("main")
+        .icon(icon_idle.clone())
+        .tooltip("MahyarVPN")
+        .menu(&menu)
+        .menu_on_left_click(false) // چپ‌کلیک = باز کردن پنجره، راست‌کلیک = منو
+        .on_menu_event(|app, e| match e.id.as_ref() {
+            "toggle" => {
+                let _ = app.emit("tray-toggle", ());
+            }
+            "show" => show_main_window(app),
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, e| {
+            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = e {
+                show_main_window(tray.app_handle());
+            }
+        })
+        .build(app)?;
+
+    app.manage(TrayMenu { status, toggle, show, quit, icon_idle, icon_on });
+    Ok(())
+}
+
+#[tauri::command]
+fn set_tray(
+    app: AppHandle,
+    tray: State<'_, TrayMenu>,
+    connected: bool,
+    status: String,
+    toggle: String,
+    toggle_enabled: bool,
+    show: String,
+    quit: String,
+    tooltip: String,
+) -> Result<(), String> {
+    tray.status.set_text(status).map_err(err)?;
+    tray.toggle.set_text(toggle).map_err(err)?;
+    tray.toggle.set_enabled(toggle_enabled).map_err(err)?;
+    tray.show.set_text(show).map_err(err)?;
+    tray.quit.set_text(quit).map_err(err)?;
+    if let Some(t) = app.tray_by_id("main") {
+        let _ = t.set_tooltip(Some(tooltip));
+        let _ = t.set_icon(Some(if connected { tray.icon_on.clone() } else { tray.icon_idle.clone() }));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn hide_main(app: AppHandle) -> Result<(), String> {
+    match app.get_webview_window("main") {
+        Some(w) => w.hide().map_err(err),
+        None => Err("no window".into()),
+    }
+}
+
+#[tauri::command]
+fn show_main(app: AppHandle) {
+    show_main_window(&app);
+}
+
+// ---------------- Autostart & notifications ----------------
+#[tauri::command]
+fn get_autostart(app: AppHandle) -> bool {
+    app.autolaunch().is_enabled().unwrap_or(false)
+}
+
+#[tauri::command]
+fn set_autostart(app: AppHandle, on: bool) -> Result<(), String> {
+    let al = app.autolaunch();
+    if on { al.enable().map_err(err) } else { al.disable().map_err(err) }
+}
+
+/// فقط وقتی پنجره مخفیه (کنار ساعت) اعلان نشون میده
+#[tauri::command]
+fn notify(app: AppHandle, title: String, body: String) {
+    let hidden = app
+        .get_webview_window("main")
+        .map(|w| !w.is_visible().unwrap_or(true))
+        .unwrap_or(true);
+    if hidden {
+        let _ = app.notification().builder().title(title).body(body).show();
+    }
+}
+
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    let autostarted = args.iter().any(|a| a == "--autostart");
+    // نسخه‌ی ادمینِ تازه باید صبر کنه تا نسخه‌ی قبلی کامل بسته بشه، وگرنه
+    // قفل single-instance هنوز دست اونه و این یکی بی‌صدا بسته میشه
+    if args.iter().any(|a| a == "--elevated") {
+        thread::sleep(Duration::from_millis(1500));
+    }
+
     tauri::Builder::default()
+        // باید اولین پلاگین باشه: اجرای دوباره = آوردن همون پنجره‌ی قبلی جلو
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| show_main_window(app)))
+        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--autostart"])))
+        .plugin(tauri_plugin_notification::init())
         .manage(Core::default())
-        .setup(|_app| {
+        .setup(move |app| {
             sysproxy::cleanup_stale(PROXY_PORT);
+            setup_tray(app)?;
+            // پنجره مخفی ساخته میشه؛ اگه با ویندوز اجرا شده همون کنار ساعت می‌مونه
+            if !autostarted {
+                show_main_window(app.handle());
+            }
             Ok(())
+        })
+        // دکمه‌ی X (یا Alt+F4) برنامه رو نمی‌بنده، میره کنار ساعت؛ خروج کامل از منوی tray
+        .on_window_event(|w, e| {
+            if let WindowEvent::CloseRequested { api, .. } = e {
+                api.prevent_close();
+                let _ = w.hide();
+            }
         })
         .invoke_handler(tauri::generate_handler![
             start_core,
             stop_core,
             core_running,
             test_delays,
+            tcp_ping,
             fetch_text,
             is_admin,
             relaunch_admin,
             core_stats,
-            get_ip
+            get_ip,
+            set_tray,
+            hide_main,
+            show_main,
+            get_autostart,
+            set_autostart,
+            notify
         ])
         .build(tauri::generate_context!())
         .expect("failed to start MahyarVPN")

@@ -24,6 +24,18 @@ const fa = {
   palette: 'دنبال چی می‌گردی؟ دستور یا سرور...', paletteHint: 'جستجو یا پرش', actions: 'دستورات', goTo: 'برو به', switchMode: 'تغییر حالت به', toggleLang: 'English',
   themes: { violet: 'بنفش نئونی', cyan: 'آبی یخی', emerald: 'زمردی', sunset: 'غروب' },
   kConnect: 'اتصال / قطع', kConfigs: 'دریافت کانفیگ', kPing: 'تست پینگ', kSearch: 'جستجوی سرور', kPalette: 'پالت دستورات', kPages: 'جابجایی صفحه‌ها', kFull: 'تمام‌صفحه',
+  trayShow: 'باز کردن MahyarVPN', startup: 'اجرا با ویندوز', startupHint: 'بی‌صدا کنار ساعت باز میشه', autoConnect: 'اتصال خودکار', autoConnectHint: 'موقع باز شدن برنامه خودش وصل میشه', notifyOn: 'وصل شدی ✓', notifyOff: 'اتصال قطع شد', trayQuit: 'خروج کامل', toTray: 'رفتن به کنار ساعت (System Tray)',
+  rescan: 'اسکن دوباره', scanning: 'در حال اسکن...', scanTitle: 'اسکن هوشمند با اینترنت تو',
+  scPhFetch: 'دریافت ساب‌ها...', scPhTcp: (d: number, n: number) => `بررسی اتصال ${d} از ${n} سرور`, scPhReal: (n: number) => `تست واقعی ${n} سرور امیدوارکننده`, scPhDone: 'تموم شد',
+  scFetch: 'دریافت', scTcp: 'زنده', scReal: 'تست واقعی', scTop: 'برترین‌ها',
+  scanDone: (k: number, pool: number, own: number) => `${k} کانفیگ سریع از بین ${pool} کانفیگ انتخاب شد${own ? ` (+${own} شخصی)` : ''}`,
+  scanSum: (pool: number, alive: number, k: number, sec: number) => `از ${pool} کانفیگ، ${alive} تا زنده بودن و ${k} تای سریع‌تر با نت تو انتخاب شدن · ${sec} ثانیه`,
+  scanShort: (pool: number, k: number) => `${k} از ${pool}`,
+  srcFailed: (names: string) => `این ساب‌ها دریافت نشدن: ${names}`, noSources: 'هیچ ساب فعالی نیست، از تنظیمات یکی رو روشن کن',
+  srcOwn: 'شخصی', srcPub: 'برترین‌ها', srcOwnHint: 'همه‌ی کانفیگ‌هاش میاد', srcPubHint: (n: number) => `فقط ${n} تای کم‌پینگ با نت تو`,
+  addSubPh: 'لینک ساب جدید... https://', add: 'افزودن', remove: 'حذف', subAdded: 'ساب اضافه شد، «اسکن دوباره» یا «دریافت کانفیگ» رو بزن', subExists: 'این ساب از قبل هست',
+  topN: 'تعداد کانفیگ از ساب عمومی', topNHint: 'بعد از تست، فقط این تعداد از سریع‌ترین‌ها نگه داشته میشن', kRescan: 'اسکن دوباره',
+
 };
 type Dict = typeof fa;
 const en: Dict = {
@@ -50,5 +62,17 @@ const en: Dict = {
   palette: 'Type a command or server...', paletteHint: 'Search or jump', actions: 'Actions', goTo: 'Go to', switchMode: 'Switch mode to', toggleLang: 'فارسی',
   themes: { violet: 'Neon violet', cyan: 'Ice blue', emerald: 'Emerald', sunset: 'Sunset' },
   kConnect: 'Connect / disconnect', kConfigs: 'Get configs', kPing: 'Test ping', kSearch: 'Search servers', kPalette: 'Command palette', kPages: 'Switch pages', kFull: 'Fullscreen',
+  trayShow: 'Open MahyarVPN', startup: 'Start with Windows', startupHint: 'Opens quietly in the tray', autoConnect: 'Auto-connect', autoConnectHint: 'Connect as soon as the app opens', notifyOn: 'Connected ✓', notifyOff: 'Disconnected', trayQuit: 'Quit', toTray: 'Hide to system tray',
+  rescan: 'Rescan', scanning: 'Scanning...', scanTitle: 'Smart scan on your network',
+  scPhFetch: 'Fetching subscriptions...', scPhTcp: (d, n) => `Probing ${d} of ${n} servers`, scPhReal: (n) => `Real-testing ${n} promising servers`, scPhDone: 'Done',
+  scFetch: 'Fetched', scTcp: 'Alive', scReal: 'Real test', scTop: 'Top picks',
+  scanDone: (k, pool, own) => `Picked the ${k} fastest out of ${pool} configs${own ? ` (+${own} private)` : ''}`,
+  scanSum: (pool, alive, k, sec) => `${pool} configs, ${alive} alive, ${k} fastest picked on your network · ${sec}s`,
+  scanShort: (pool, k) => `${k} of ${pool}`,
+  srcFailed: (names) => `Couldn't fetch: ${names}`, noSources: 'No subscription enabled, turn one on in Settings',
+  srcOwn: 'Private', srcPub: 'Top picks', srcOwnHint: 'All configs are kept', srcPubHint: (n) => `Only the ${n} lowest-ping on your network`,
+  addSubPh: 'New subscription URL... https://', add: 'Add', remove: 'Remove', subAdded: 'Added. Hit Rescan or Get configs', subExists: 'Already added',
+  topN: 'Configs kept from public subs', topNHint: 'After testing, only this many of the fastest are kept', kRescan: 'Rescan',
+
 };
 export const t: Record<Lang, Dict> = { fa, en };

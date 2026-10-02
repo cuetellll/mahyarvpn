@@ -15,6 +15,8 @@ export const I = {
   shieldOff: <S><path d="M12 3l7.5 3v5.6c0 4.7-3.2 8.2-7.5 9.4-4.3-1.2-7.5-4.7-7.5-9.4V6z" /><path d="M9.5 9.5l5 5M14.5 9.5l-5 5" /></S>,
   search: <S><circle className="d" cx="11" cy="11" r="6.5" /><circle cx="11" cy="11" r="6.5" /><path d="M20 20l-4.2-4.2" /></S>,
   refresh: <S><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3" /><path d="M19.5 4.5v4.5H15" /></S>,
+  radar: <S><circle className="d" cx="12" cy="12" r="8.5" /><circle cx="12" cy="12" r="8.5" /><circle cx="12" cy="12" r="4.5" /><path d="M12 12l5.5-5.5" /><circle cx="15.6" cy="14.8" r=".9" fill="currentColor" /></S>,
+  plus: <S><path d="M12 5.5v13M5.5 12h13" /></S>,
   pulse: <S><path d="M3 12h3.5l2.5-6 4 12 2.5-6H21" /></S>,
   bolt: <S><path className="d" d="M13 3L5 13.5h6L10 21l8-10.5h-6z" /><path d="M13 3L5 13.5h6L10 21l8-10.5h-6z" /></S>,
   star: <S><path d="M12 3.6l2.5 5.2 5.7.8-4.1 4 1 5.7L12 16.6l-5.1 2.7 1-5.7-4.1-4 5.7-.8z" /></S>,

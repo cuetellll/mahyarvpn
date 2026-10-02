@@ -1,13 +1,17 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type MouseEvent as RME } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { listen } from '@tauri-apps/api/event';
 import { decodeSubscription, parseLinks, type VNode } from './parser';
-import { buildConfig, buildTestConfig } from './singbox';
-import { SUB_URLS, PROXY_PORT, TEST_URL, TEST_TIMEOUT } from './config';
+import { buildConfig } from './singbox';
+import { BUILTIN_SOURCES, DEFAULT_TOP_N, PROXY_PORT, type SubSource } from './config';
+import { smartScan, realTest, type ScanState } from './scan';
 import { t, type Lang } from './i18n';
 import { I } from './icons';
 import { GEO, ccHue } from './geo';
 import Globe from './components/Globe';
+import CoreIcon from './components/CoreIcon';
+import WaveName from './components/WaveName';
 import { Area, Count } from './components/bits';
 
 type Status = 'idle' | 'connecting' | 'connected';
@@ -17,8 +21,11 @@ type Step = '' | 'test' | 'start' | 'switch';
 type Theme = 'violet' | 'cyan' | 'emerald' | 'sunset';
 type IpInfo = { query: string; country: string; countryCode: string } | null;
 type Toast = { id: number; msg: string; type: 'ok' | 'err' };
+type CustomSub = { id: string; name: string; url: string };
+type LastScan = { pool: number; alive: number; tested: number; ok: number; picked: number; ms: number; at: number } | null;
+type Src = 'own' | 'pub';
 
-const VERSION = '2.0.0';
+const VERSION = '2.3.0';
 const HIST = 90;
 const PAGES: Page[] = ['home', 'servers', 'stats', 'settings'];
 const THEMES: Record<Theme, [string, string]> = {
@@ -70,6 +77,45 @@ const Card = ({ className = '', children, style }: { className?: string; childre
 );
 const Kbd = ({ k }: { k: string }) => <span className="kbds">{k.split('+').map((x) => <kbd key={x}>{x}</kbd>)}</span>;
 
+const PHASES: ScanState['phase'][] = ['fetch', 'tcp', 'real', 'done'];
+const scanPct = (s: ScanState) =>
+  s.phase === 'fetch' ? 5
+    : s.phase === 'tcp' ? 8 + 52 * (s.tcpTotal ? s.tcpDone / s.tcpTotal : 0)
+      : s.phase === 'real' ? 60 + 38 * Math.min(1, Math.max(s.ok / Math.max(1, s.target), s.tested / Math.max(60, s.target * 6)))
+        : 100;
+
+/** پنل زنده‌ی اسکن هوشمند: قیف «دریافت ← TCP ← تست واقعی ← برترین‌ها» */
+function ScanPanel({ s, T, compact }: { s: ScanState; T: (typeof t)['fa']; compact?: boolean }) {
+  const cur = PHASES.indexOf(s.phase);
+  const pct = scanPct(s);
+  const steps = [
+    { label: T.scFetch, v: s.pool ? String(s.pool) : '' },
+    { label: T.scTcp, v: s.phase === 'tcp' ? `${s.tcpDone}/${s.tcpTotal}` : cur > 1 ? String(s.alive) : '' },
+    { label: T.scReal, v: s.tested ? `${s.ok}/${s.tested}` : '' },
+    { label: T.scTop, v: cur >= 2 ? `${Math.min(s.ok, s.target)}/${s.target}` : '' },
+  ];
+  const sub = s.phase === 'fetch' ? T.scPhFetch : s.phase === 'tcp' ? T.scPhTcp(s.tcpDone, s.tcpTotal) : s.phase === 'real' ? T.scPhReal(s.tested) : T.scPhDone;
+  return (
+    <div className={`scan ${compact ? 'compact' : ''}`}>
+      <div className="scan-h">
+        <span className="radar"><i /><i /><b /></span>
+        <div className="scan-t"><b>{T.scanTitle}</b><small className="mono-num">{sub}</small></div>
+        <span className="scan-pct mono">{Math.round(pct)}%</span>
+      </div>
+      <div className="scan-bar"><i style={{ width: `${pct}%` }} /></div>
+      <div className="funnel">
+        {steps.map((x, i) => (
+          <div key={i} className={`fs ${i < cur || s.phase === 'done' ? 'done' : i === cur ? 'on' : ''}`}>
+            <span className="fs-dot">{i < cur || s.phase === 'done' ? I.check : <i />}</span>
+            <span className="fs-v mono">{x.v || '·'}</span>
+            <span className="fs-l">{x.label}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [lang, setLang] = useState<Lang>(() => load('lang', 'fa'));
   const [mode, setMode] = useState<Mode>(() => load('mode', 'tun'));
@@ -82,10 +128,21 @@ export default function App() {
   const [fetchedAt, setFetchedAt] = useState<number>(() => load('fetchedAt', 0));
   const [theme, setTheme] = useState<Theme>(() => load('theme', 'violet'));
   const [reduce, setReduce] = useState<boolean>(() => load('reduce', false));
+  const [autoConnect, setAutoConnect] = useState<boolean>(() => load('autoConnect', false));
+  const [topN, setTopN] = useState<number>(() => load('topN', DEFAULT_TOP_N));
+  const [customSubs, setCustomSubs] = useState<CustomSub[]>(() => load('customSubs', []));
+  const [subOff, setSubOff] = useState<string[]>(() => load('subOff', []));
+  const [srcOf, setSrcOf] = useState<Record<string, Src>>(() => load('srcOf', {}));
+  const [picks, setPicks] = useState<string[]>(() => load('picks', []));
+  const [lastScan, setLastScan] = useState<LastScan>(() => load('lastScan', null));
+  const [scan, setScan] = useState<ScanState | null>(null);
+  const [newSub, setNewSub] = useState('');
+  const poolRef = useRef<VNode[] | null>(null);
+  const [startup, setStartup] = useState(false);
   const [status, setStatus] = useState<Status>('idle');
   const [step, setStep] = useState<Step>('');
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [busy, setBusy] = useState<'' | 'fetch' | 'test'>('');
+  const [busy, setBusy] = useState<'' | 'fetch' | 'test' | 'scan'>('');
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [adminAsk, setAdminAsk] = useState(false);
   const [since, setSince] = useState(0);
@@ -104,6 +161,7 @@ export default function App() {
   const [flash, setFlash] = useState(0);
   const [shake, setShake] = useState(false);
   const testingRef = useRef(false);
+  const fromTray = useRef(false);
   const lastStats = useRef<[number, number] | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const palRef = useRef<HTMLInputElement>(null);
@@ -124,12 +182,21 @@ export default function App() {
     const q = query.trim().toLowerCase();
     let list = q ? nodes.filter((n) => n.name.toLowerCase().includes(q) || n.protocol.includes(q)) : nodes;
     if (filter === 'fav') list = list.filter((n) => favs.includes(n.id));
+    else if (filter === 'src-own') list = list.filter((n) => srcOf[n.id] !== 'pub');
+    else if (filter === 'src-pub') list = list.filter((n) => srcOf[n.id] === 'pub');
     else if (filter !== 'all') list = list.filter((n) => n.protocol === filter);
     const fav = (n: VNode) => (favs.includes(n.id) ? 0 : 1);
     const v = (n: VNode) => { const p = pings[n.id]; return p === undefined ? 1e9 : p < 0 ? 1e10 : p; };
     return [...list].sort((a, b) => fav(a) - fav(b) || (sortPing ? v(a) - v(b) : 0));
-  }, [nodes, query, sortPing, pings, filter, favs]);
+  }, [nodes, query, sortPing, pings, filter, favs, srcOf]);
   const markers = useMemo(() => Array.from(new Set(nodes.map((n) => splitFlag(n.name).cc).filter((c) => c && GEO[c]))), [nodes]);
+  const sources: SubSource[] = useMemo(() => [
+    ...BUILTIN_SOURCES,
+    ...customSubs.map((c) => ({ id: c.id, name: c.name, urls: [c.url], kind: 'public' as const })),
+  ], [customSubs]);
+  const rankOf = useMemo(() => new Map(picks.map((id, i) => [id, i])), [picks]);
+  const hasBoth = useMemo(() => nodes.some((n) => srcOf[n.id] === 'pub') && nodes.some((n) => srcOf[n.id] !== 'pub'), [nodes, srcOf]);
+  const quick = useMemo(() => nodes.filter((n) => (pings[n.id] ?? -1) > 0).sort((a, b) => pings[a.id] - pings[b.id]).slice(0, 3), [nodes, pings]);
   const active = nodes.find((n) => n.id === activeId);
   const selNode = nodes.find((n) => n.id === selected);
   const bestNode = nodes.find((n) => n.id === bestId);
@@ -147,15 +214,23 @@ export default function App() {
   useEffect(() => save('fetchedAt', fetchedAt), [fetchedAt]);
   useEffect(() => save('theme', theme), [theme]);
   useEffect(() => save('reduce', reduce), [reduce]);
+  useEffect(() => save('autoConnect', autoConnect), [autoConnect]);
+  useEffect(() => save('topN', topN), [topN]);
+  useEffect(() => save('customSubs', customSubs), [customSubs]);
+  useEffect(() => save('subOff', subOff), [subOff]);
+  useEffect(() => save('srcOf', srcOf), [srcOf]);
+  useEffect(() => save('picks', picks), [picks]);
+  useEffect(() => save('lastScan', lastScan), [lastScan]);
+  useEffect(() => { invoke<boolean>('get_autostart').then(setStartup).catch(() => {}); }, []);
   useEffect(() => {
     document.documentElement.dir = lang === 'fa' ? 'rtl' : 'ltr';
     document.documentElement.lang = lang;
   }, [lang]);
-  useEffect(() => { if (filter !== 'all' && filter !== 'fav' && !protocols.includes(filter)) setFilter('all'); }, [protocols]); // eslint-disable-line
+  useEffect(() => { if (filter !== 'all' && filter !== 'fav' && !filter.startsWith('src-') && !protocols.includes(filter)) setFilter('all'); }, [protocols]); // eslint-disable-line
   useEffect(() => { const id = window.setTimeout(() => setSplash(false), 1700); return () => window.clearTimeout(id); }, []);
   useEffect(() => { if (pal) { setPalQ(''); setPalI(0); window.setTimeout(() => palRef.current?.focus(), 30); } }, [pal]);
 
-  const actions = useRef({ toggle: () => {}, updateConfigs: () => {}, testAll: () => {} });
+  const actions = useRef<{ toggle: () => Promise<unknown>; updateConfigs: () => unknown; rescan: () => unknown; testAll: () => unknown }>({ toggle: async () => {}, updateConfigs: () => {}, rescan: () => {}, testAll: () => {} });
 
   // کیبورد
   useEffect(() => {
@@ -166,6 +241,7 @@ export default function App() {
       if (e.key === 'F5') { e.preventDefault(); actions.current.updateConfigs(); }
       if (e.ctrlKey && e.key === 'Enter') { e.preventDefault(); actions.current.toggle(); }
       if (e.ctrlKey && k === 't') { e.preventDefault(); actions.current.testAll(); }
+      if (e.ctrlKey && k === 'r') { e.preventDefault(); actions.current.rescan(); }
       if (e.ctrlKey && k === 'k') { e.preventDefault(); setPal((v) => !v); }
       if (e.ctrlKey && k === 'f') { e.preventDefault(); setPage('servers'); window.setTimeout(() => searchRef.current?.focus(), 200); }
       if (e.ctrlKey && ['1', '2', '3', '4'].includes(e.key)) { e.preventDefault(); setPage(PAGES[Number(e.key) - 1]); }
@@ -213,7 +289,10 @@ export default function App() {
     setToasts((ts) => [...ts.slice(-2), { id, msg, type }]);
     window.setTimeout(() => setToasts((ts) => ts.filter((x) => x.id !== id)), 4500);
   };
+  /** اگه کار از منوی tray شروع شده و پنجره مخفیه، بیارش جلو تا کاربر خطا رو ببینه */
+  const surface = () => { if (fromTray.current) invoke('show_main').catch(() => {}); };
   const fail = (msg: string) => {
+    surface();
     setShake(true);
     window.setTimeout(() => setShake(false), 600);
     showToast(msg, 'err');
@@ -259,40 +338,98 @@ export default function App() {
     }
   }
 
-  async function updateConfigs() {
-    if (busy) return;
+  /** همه‌ی منبع‌های فعال رو موازی می‌گیره؛ ساب شخصی کامل، ساب‌های عمومی میرن برای اسکن */
+  async function fetchSources() {
+    const srcs = sources.filter((x) => !subOff.includes(x.id));
+    if (!srcs.length) throw new Error(T.noSources);
+    const res = await Promise.allSettled(srcs.map((x) => invoke<string>('fetch_text', { urls: x.urls })));
+    const own: VNode[] = [], pub: VNode[] = [], failed: string[] = [];
+    let skipped = 0;
+    res.forEach((r, i) => {
+      if (r.status !== 'fulfilled') { failed.push(srcs[i].name); return; }
+      const p = parseLinks(decodeSubscription(r.value));
+      skipped += p.skipped;
+      (srcs[i].kind === 'own' ? own : pub).push(...p.nodes);
+    });
+    if (failed.length === srcs.length) {
+      const r0 = res.find((r) => r.status === 'rejected') as PromiseRejectedResult | undefined;
+      throw new Error(errMsg(r0?.reason ?? T.fetchErr));
+    }
+    return { own, pub, skipped, failed };
+  }
+
+  /**
+   * دریافت کانفیگ + اسکن هوشمند.
+   * reuse=true: ساب رو دوباره دانلود نمی‌کنه، فقط با همون استخر قبلی دوباره سریع‌ترین‌ها رو پیدا می‌کنه
+   */
+  async function updateConfigs(reuse = false) {
+    if (busy || status === 'connecting') return;
     setBusy('fetch');
+    setScan({ phase: 'fetch', pool: 0, tcpDone: 0, tcpTotal: 0, alive: 0, tested: 0, ok: 0, target: topN });
+    testingRef.current = true;
+    const reconnect = status === 'connected' && mode === 'tun' ? active : undefined;
+    let stopped = false;
     try {
-      const text = await invoke<string>('fetch_text', { urls: SUB_URLS });
-      const { nodes: ns, skipped } = parseLinks(decodeSubscription(text));
-      if (!ns.length) throw new Error(T.noValid);
-      setLinks(ns.map((n) => n.link));
-      setPings({});
+      let own: VNode[], pub: VNode[], skipped = 0, failed: string[] = [];
+      if (reuse && poolRef.current) {
+        own = nodes.filter((n) => srcOf[n.id] !== 'pub');
+        pub = poolRef.current;
+      } else {
+        ({ own, pub, skipped, failed } = await fetchSources());
+        poolRef.current = pub;
+      }
+      const ownIds = new Set(own.map((n) => n.id));
+      pub = pub.filter((n) => !ownIds.has(n.id));
+      if (!own.length && !pub.length) throw new Error(T.noValid);
+
+      // تست باید با نت خود کاربر باشه، نه از داخل تونل TUN
+      if (reconnect) { await invoke('stop_core').catch(() => {}); stopped = true; }
+      setBusy('scan');
+
+      let top: VNode[] = [], p: Record<string, number> = {}, poolSize = 0;
+      if (pub.length) {
+        const r = await smartScan(pub, topN, setScan);
+        top = r.top; p = { ...r.pings }; poolSize = r.state.pool;
+        setLastScan({ pool: r.state.pool, alive: r.state.alive, tested: r.state.tested, ok: r.state.ok, picked: top.length, ms: r.ms, at: Date.now() });
+      }
+      if (own.length) {
+        const ro = await realTest(own);
+        own.forEach((n, i) => (p[n.id] = ro[i]));
+      }
+      // علاقه‌مندی‌های قبلی از ساب عمومی حذف نمیشن
+      const keep = nodes.filter((n) => favs.includes(n.id) && srcOf[n.id] === 'pub' && !top.some((x) => x.id === n.id) && !ownIds.has(n.id));
+      const all = [...own, ...top, ...keep];
+      if (!all.length) throw new Error(T.noWorking);
+
+      const src: Record<string, Src> = {};
+      own.forEach((n) => (src[n.id] = 'own'));
+      [...top, ...keep].forEach((n) => (src[n.id] = 'pub'));
+      setLinks(all.map((n) => n.link));
+      setSrcOf(src);
+      setPicks(top.map((n) => n.id));
+      setPings(p);
       setFetchedAt(Date.now());
-      setFavs((f) => f.filter((id) => ns.some((n) => n.id === id)));
-      if (!ns.some((n) => n.id === selected)) setSelected(ns[0].id);
-      showToast(T.updated(ns.length, skipped), 'ok');
+      setFavs((f) => f.filter((id) => all.some((n) => n.id === id)));
+      if (!all.some((n) => n.id === selected)) setSelected(all[0].id);
+      showToast(pub.length ? T.scanDone(top.length, poolSize, own.length) : T.updated(all.length, skipped), 'ok');
+      if (failed.length) showToast(T.srcFailed(failed.join('، ')), 'err');
     } catch (e) {
       fail(`${T.fetchErr}: ${errMsg(e)}`);
     } finally {
+      if (stopped && reconnect) await startNode(reconnect).catch((e) => { setStatus('idle'); setActiveId(null); fail(`${T.connErr}: ${errMsg(e)}`); });
+      testingRef.current = false;
       setBusy('');
+      setScan(null);
     }
   }
+  const refetch = () => updateConfigs(false);
+  const rescan = () => updateConfigs(true);
 
   async function runTest(list: VNode[]): Promise<Record<string, number>> {
     const res: Record<string, number> = {};
     if (!list.length) return res;
-    const call = (ns: VNode[]) =>
-      invoke<number[]>('test_delays', { config: JSON.stringify(buildTestConfig(ns)), count: ns.length, url: TEST_URL, timeout: TEST_TIMEOUT });
-    try {
-      const arr = await call(list);
-      list.forEach((n, i) => (res[n.id] = arr[i]));
-    } catch {
-      for (const n of list) {
-        try { res[n.id] = (await call([n]))[0]; } catch { res[n.id] = -1; }
-        setPings((p) => ({ ...p, [n.id]: res[n.id] }));
-      }
-    }
+    const arr = await realTest(list, { onItem: () => {} });
+    list.forEach((n, i) => (res[n.id] = arr[i]));
     return res;
   }
 
@@ -339,7 +476,7 @@ export default function App() {
     if (status === 'connecting' || busy) return;
     if (status === 'connected') return disconnect();
     if (!nodes.length) return fail(T.noConfigs);
-    if (mode === 'tun' && !(await invoke<boolean>('is_admin').catch(() => false))) return setAdminAsk(true);
+    if (mode === 'tun' && !(await invoke<boolean>('is_admin').catch(() => false))) { surface(); return setAdminAsk(true); }
 
     setStatus('connecting');
     try {
@@ -405,6 +542,17 @@ export default function App() {
     await connectTo(ok[0]);
   }
 
+  function addSub() {
+    const raw = newSub.trim();
+    if (!/^https?:\/\/\S+$/.test(raw)) return;
+    if (sources.some((x) => x.urls.includes(raw))) { showToast(T.subExists, 'err'); return; }
+    let name = '';
+    try { const u = new URL(raw); name = decodeURIComponent(u.hash.slice(1)) || u.hostname; } catch { name = raw; }
+    setCustomSubs((c) => [...c, { id: `c${Date.now().toString(36)}`, name, url: raw }]);
+    setNewSub('');
+    showToast(T.subAdded, 'ok');
+  }
+
   const toggleFav = (id: string) => setFavs((f) => (f.includes(id) ? f.filter((x) => x !== id) : [...f, id]));
   const copyIp = () => {
     if (ip && typeof ip === 'object') navigator.clipboard?.writeText(ip.query).then(() => showToast(T.copied, 'ok')).catch(() => {});
@@ -417,11 +565,50 @@ export default function App() {
   };
   const offMag = () => { if (magRef.current) magRef.current.style.transform = ''; };
 
-  actions.current = { toggle, updateConfigs, testAll };
+  actions.current = { toggle, updateConfigs: refetch, rescan, testAll };
+
+  // tray: کلیک «اتصال/قطع» از منوی راست‌کلیک آیکون کنار ساعت
+  useEffect(() => {
+    const un = listen('tray-toggle', async () => {
+      fromTray.current = true;
+      try { await actions.current.toggle(); } finally { fromTray.current = false; }
+    });
+    return () => { un.then((f) => f()).catch(() => {}); };
+  }, []);
+
+  // اتصال خودکار موقع باز شدن برنامه (یه بار، وقتی سرورها آماده‌ان)
+  const autoDone = useRef(false);
+  useEffect(() => {
+    if (autoDone.current || !autoConnect || splash || !nodes.length || status !== 'idle' || busy) return;
+    autoDone.current = true;
+    fromTray.current = true; // اگه پنجره مخفیه و خطا داد، بیارش جلو
+    actions.current.toggle().finally(() => { fromTray.current = false; });
+  }, [autoConnect, splash, nodes.length, status, busy]);
+
+  // اعلان ویندوز وقتی پنجره مخفیه (Rust خودش چک می‌کنه)
+  const prevStatus = useRef<Status>('idle');
+  useEffect(() => {
+    const prev = prevStatus.current; prevStatus.current = status;
+    if (status === 'connected' && prev !== 'connected') invoke('notify', { title: T.notifyOn, body: active ? splitFlag(active.name).label : 'MahyarVPN' }).catch(() => {});
+    if (status === 'idle' && prev === 'connected') invoke('notify', { title: T.notifyOff, body: 'MahyarVPN' }).catch(() => {});
+  }, [status]); // eslint-disable-line
 
   /* ---------- derived ---------- */
   const label = status === 'connected' ? T.connected : status === 'connecting' ? T.connecting : T.idle;
   const stepText = step === 'test' ? T.stepTest : step === 'start' ? T.stepStart : step === 'switch' ? T.stepSwitch : '';
+  const activeLabel = active ? splitFlag(active.name).label : '';
+  useEffect(() => {
+    const st = status === 'connected' ? `● ${T.connected}${activeLabel ? ` · ${activeLabel}` : ''}` : status === 'connecting' ? `◌ ${T.connecting}...` : `○ ${T.idle}`;
+    invoke('set_tray', {
+      connected: status === 'connected',
+      status: st,
+      toggle: status === 'connected' ? T.disconnect : T.connect,
+      toggleEnabled: status !== 'connecting',
+      show: T.trayShow,
+      quit: T.trayQuit,
+      tooltip: `MahyarVPN · ${status === 'connected' ? T.connected : status === 'connecting' ? T.connecting : T.idle}${activeLabel ? ` · ${activeLabel}` : ''}`,
+    }).catch(() => {});
+  }, [status, lang, activeLabel]); // eslint-disable-line
   const mins = fetchedAt ? Math.floor((now - fetchedAt) / 60000) : -1;
   const updatedText = mins < 0 ? T.never : mins < 1 ? T.justNow : T.ago(mins);
   const downs = hist.map((x) => x.d), ups = hist.map((x) => x.u);
@@ -441,7 +628,8 @@ export default function App() {
     const A: PItem[] = [
       { id: 'tog', group: T.actions, icon: I.power, label: status === 'connected' ? T.disconnect : T.connect, hint: 'Ctrl+Enter', run: toggle },
       { id: 'fast', group: T.actions, icon: I.bolt, label: T.fastest, run: connectFastest },
-      { id: 'cfg', group: T.actions, icon: I.refresh, label: T.getConfigs, hint: 'F5', run: updateConfigs },
+      { id: 'cfg', group: T.actions, icon: I.refresh, label: T.getConfigs, hint: 'F5', run: refetch },
+      { id: 'scan', group: T.actions, icon: I.radar, label: T.rescan, hint: 'Ctrl+R', run: rescan },
       { id: 'ping', group: T.actions, icon: I.pulse, label: T.testPing, hint: 'Ctrl+T', run: testAll },
       { id: 'mode', group: T.actions, icon: mode === 'tun' ? I.proxy : I.cpu, label: `${T.switchMode} ${mode === 'tun' ? 'Proxy' : 'TUN'}`, run: () => status === 'idle' && setMode(mode === 'tun' ? 'proxy' : 'tun') },
       { id: 'lang', group: T.actions, icon: I.lang, label: T.toggleLang, run: () => setLang(lang === 'fa' ? 'en' : 'fa') },
@@ -459,11 +647,11 @@ export default function App() {
     <div className="pg dash">
       <Card className="stage">
         <div className="stage-top">
-          <div className="st-chip"><span className="st-dot" />{label}</div>
+          <span className="st-dot solo" title={label} />
+          <WaveName />
           <div className="st-mode">{mode === 'tun' ? I.cpu : I.proxy}{mode.toUpperCase()}</div>
         </div>
         <div className="globe-wrap"><Globe status={status} markers={markers} target={status !== 'idle' ? (active ? splitFlag(active.name).cc : undefined) : undefined} a1={a1} a2={a2} st={ST[status]} reduce={reduce} /></div>
-        <div className="timer mono" data-on={status === 'connected'}>{status === 'connected' ? fmtTime(now - since) : '00:00:00'}</div>
         <div className="core-area">
           <div className="mag" ref={magRef} onMouseMove={onMag} onMouseLeave={offMag}>
             <button className={`core ${status} ${shake ? 'shake' : ''}`} onClick={toggle} disabled={!!busy && status !== 'connected'} aria-label={status === 'connected' ? T.disconnect : T.connect}>
@@ -472,19 +660,32 @@ export default function App() {
               <svg className="core-arc" viewBox="0 0 100 100"><circle cx="50" cy="50" r="46" /></svg>
               {flash > 0 && <span className="shock" key={flash} />}
               <span className="core-in">
-                <span className="core-ic" key={status}>{status === 'connected' ? I.shieldOk : I.power}</span>
+                <span className="core-ic"><CoreIcon status={status} /></span>
+                <span className="core-tx">{status === 'connected' ? T.disconnect : status === 'connecting' ? '...' : T.connect}</span>
               </span>
             </button>
           </div>
           <div className="core-label">
             <b key={label}>{status === 'connecting' && stepText ? stepText : label}</b>
-            <small>{status === 'connected' ? T.tapDisconnect : status === 'connecting' ? T.wait : T.tapConnect}</small>
+            {status === 'connected'
+              ? <span className="timer mono" data-on="true">{fmtTime(now - since)}</span>
+              : <small>{status === 'connecting' ? T.wait : T.tapConnect}</small>}
           </div>
         </div>
         {status === 'connecting' && <div className="steps">{(['test', 'start'] as Step[]).map((s, i) => <i key={s} className={step === s || (step === 'start' && i === 0) || step === 'switch' ? 'on' : ''} />)}</div>}
       </Card>
 
       <div className="side">
+        {scan ? (
+        <Card className="srv-card scan-card"><ScanPanel s={scan} T={T} compact /></Card>
+        ) : !nodes.length ? (
+        <Card className="srv-card empty-home">
+          <div className="eh-ic">{I.servers}</div>
+          <b>{T.noConfigs}</b>
+          <small>{T.emptyHint}</small>
+          <button className="btn accent rp" onClick={refetch} disabled={!!busy}><span className={busy === 'fetch' ? 'spin' : ''}>{I.refresh}</span>{busy === 'fetch' ? T.fetching : T.getConfigs}</button>
+        </Card>
+        ) : (
         <Card className="srv-card">
           <div className="lbl">{status === 'connected' ? T.current : T.location}</div>
           <div className="srv-row">
@@ -495,13 +696,25 @@ export default function App() {
             </div>
             {shownNode && pings[shownNode.id] !== undefined && <div className={`big-ping ${pingClass(pings[shownNode.id])}`}><Meter p={pings[shownNode.id]} /><span className="mono">{pings[shownNode.id] < 0 ? '×' : pings[shownNode.id]}</span></div>}
           </div>
+          {quick.length > 0 && (
+            <div className="quick">
+              {quick.map((n) => { const f = splitFlag(n.name), p = pings[n.id]; return (
+                <button key={n.id} className={`qchip rp ${n.id === activeId ? 'on' : ''}`} onClick={() => connectTo(n)} disabled={!!busy || status === 'connecting'} title={f.label}>
+                  <Flag cc={f.cc} size="s" />
+                  <span className="q-n" dir="auto">{f.label}</span>
+                  <b className={`mono ${pingClass(p)}`}>{p}<small>ms</small></b>
+                </button>
+              ); })}
+            </div>
+          )}
           <div className="row2">
             <button className="btn rp" onClick={() => setPage('servers')}>{I.servers}{T.change}</button>
             <button className="btn accent rp" onClick={connectFastest} disabled={!!busy || status === 'connecting' || !nodes.length}>{I.bolt}{T.fastest}</button>
           </div>
         </Card>
+        )}
 
-        <div className="tiles">
+        <div className={`tiles ${status === 'connected' ? '' : 'dimmed'}`}>
           <Card className="tile dl">
             <div className="tile-h"><span className="ti">{I.down}</span>{T.down}</div>
             <div className="tile-v mono"><Count value={speed.down} fmt={(v) => fmtBytes(v)} /><small>/s</small></div>
@@ -547,13 +760,30 @@ export default function App() {
           <p className="pg-sub"><span className="chip-n">{nodes.length}</span>{tested > 0 && <span className="on-n"><i />{online} {T.online}</span>}<span className="muted">· {T.lastUpdate}: {updatedText}</span></p>
         </div>
         <div className="head-actions">
-          <button className="ibtn rp" onClick={updateConfigs} disabled={!!busy || status === 'connecting'} title={T.getConfigs}><span className={busy === 'fetch' ? 'spin' : ''}>{I.refresh}</span></button>
-          <button className="ibtn rp" onClick={testAll} disabled={!!busy || status === 'connecting' || !nodes.length} title={T.testPing}><span className={busy === 'test' ? 'pulse' : ''}>{I.pulse}</span></button>
-          <button className={`ibtn rp ${sortPing ? 'on' : ''}`} onClick={() => setSortPing(!sortPing)} title={T.sortPing}>{I.sort}</button>
+          <div className="tgroup">
+            <button className="tb" onClick={refetch} disabled={!!busy || status === 'connecting'} data-tip={`${T.getConfigs} · F5`}><span className={busy === 'fetch' ? 'spin' : ''}>{I.refresh}</span></button>
+            <button className="tb" onClick={rescan} disabled={!!busy || status === 'connecting'} data-tip={`${T.rescan} · Ctrl+R`}><span className={busy === 'scan' ? 'spin' : ''}>{I.radar}</span></button>
+            <button className="tb" onClick={testAll} disabled={!!busy || status === 'connecting' || !nodes.length} data-tip={`${T.testPing} · Ctrl+T`}><span className={busy === 'test' ? 'pulse' : ''}>{I.pulse}</span></button>
+            <span className="tg-sep" />
+            <button className={`tb ${sortPing ? 'on' : ''}`} onClick={() => setSortPing(!sortPing)} data-tip={T.sortPing}>{I.sort}</button>
+          </div>
           <button className="btn accent rp" onClick={connectFastest} disabled={!!busy || status === 'connecting' || !nodes.length}>{I.bolt}<span className="hide-s">{T.fastest}</span></button>
         </div>
       </div>
-      <div className={`bar ${busy ? 'on' : ''}`}><i style={busy === 'test' && tested ? { width: `${(tested / Math.max(1, nodes.length)) * 100}%`, animation: 'none' } : undefined} /></div>
+      {scan ? (
+        <Card className="scan-card wide"><ScanPanel s={scan} T={T} /></Card>
+      ) : (
+        <>
+          <div className={`bar ${busy ? 'on' : ''}`}><i style={busy === 'test' && tested ? { width: `${(tested / Math.max(1, nodes.length)) * 100}%`, animation: 'none' } : undefined} /></div>
+          {lastScan && picks.length > 0 && (
+            <div className="scan-strip">
+              <span className="ss-ic">{I.radar}</span>
+              <span className="ss-t">{T.scanSum(lastScan.pool, lastScan.alive, lastScan.picked, Math.round(lastScan.ms / 1000))}</span>
+              <button className="btn sm ghost rp" onClick={rescan} disabled={!!busy || status === 'connecting'}>{I.refresh}{T.rescan}</button>
+            </div>
+          )}
+        </>
+      )}
       <div className="toolbar">
         <div className="search">
           {I.search}
@@ -562,9 +792,9 @@ export default function App() {
         </div>
         {nodes.length > 0 && (
           <div className="chips">
-            {['all', 'fav', ...protocols].map((f) => (
+            {['all', 'fav', ...(hasBoth ? ['src-pub', 'src-own'] : []), ...protocols].map((f) => (
               <button key={f} className={`chipf rp ${filter === f ? 'on' : ''}`} onClick={() => setFilter(f)}>
-                {f === 'fav' && I.star}{f === 'all' ? T.all : f === 'fav' ? T.favs : f}
+                {f === 'fav' && I.star}{f === 'src-pub' && I.radar}{f === 'src-own' && I.lock}{f === 'all' ? T.all : f === 'fav' ? T.favs : f === 'src-pub' ? T.srcPub : f === 'src-own' ? T.srcOwn : f}
               </button>
             ))}
           </div>
@@ -575,24 +805,25 @@ export default function App() {
           <div className="empty">
             <div className="empty-art"><span /><span /><span />{I.servers}</div>
             <b>{T.noConfigs}</b><p>{T.emptyHint}</p>
-            <button className="btn accent rp" onClick={updateConfigs} disabled={!!busy}><span className={busy === 'fetch' ? 'spin' : ''}>{I.refresh}</span>{busy === 'fetch' ? T.fetching : T.getConfigs}</button>
+            <button className="btn accent rp" onClick={refetch} disabled={!!busy}><span className={busy === 'fetch' ? 'spin' : ''}>{I.refresh}</span>{busy === 'fetch' ? T.fetching : T.getConfigs}</button>
           </div>
         )}
         {nodes.length > 0 && !shown.length && <div className="empty small">{T.noMatch}</div>}
         {shown.map((n, i) => {
           const p = pings[n.id], f = splitFlag(n.name), tr = transportOf(n);
           const isSel = !auto && n.id === selected, isAct = n.id === activeId, isFav = favs.includes(n.id);
+          const rk = rankOf.get(n.id);
           return (
             <div key={n.id} role="button" tabIndex={0} className={`srv rp ${isSel ? 'sel' : ''} ${isAct ? 'act' : ''}`}
               style={{ animationDelay: `${Math.min(i, 18) * 26}ms` }} onClick={() => pick(n)} onDoubleClick={() => connectTo(n)} onKeyDown={(e) => e.key === 'Enter' && pick(n)}>
-              <Flag cc={f.cc} />
+              <span className="flag-wrap"><Flag cc={f.cc} />{rk !== undefined && <span className={`rank ${rk < 3 ? `r${rk + 1}` : ''}`}>{rk + 1}</span>}</span>
               <div className="srv-meta">
                 <b dir="auto">{f.label}</b>
-                <span className="tags"><em className={`p-${n.protocol}`}>{n.protocol}</em>{tr && <em>{tr}</em>}{n.id === bestId && <em className="best">{I.bolt}{T.best}</em>}</span>
+                <span className="tags"><em className={`p-${n.protocol}`}>{n.protocol}</em>{tr && <em>{tr}</em>}{hasBoth && srcOf[n.id] !== 'pub' && <em className="own">{I.lock}{T.srcOwn}</em>}{n.id === bestId && <em className="best">{I.bolt}{T.best}</em>}</span>
               </div>
               <div className={`srv-ping ${pingClass(p)} ${busy === 'test' && p === undefined ? 'ld' : ''}`}>
                 <Meter p={p} />
-                <span className="mono">{p === undefined ? (busy === 'test' ? '' : '—') : p < 0 ? T.timeout : `${p}ms`}</span>
+                <span className="mono pill">{p === undefined ? (busy === 'test' ? '' : '—') : p < 0 ? T.timeout : `${p}ms`}</span>
               </div>
               <span role="button" className={`fav ${isFav ? 'on' : ''}`} onClick={(e) => { e.stopPropagation(); toggleFav(n.id); }}>{I.star}</span>
               {isAct && <span className="live">LIVE</span>}
@@ -670,6 +901,8 @@ export default function App() {
           </div>
           <div className="opt"><div><b>{T.auto}</b><small>{T.autoHint}</small></div><Switch on={auto} onChange={setAuto} /></div>
           <div className="opt"><div><b>{T.sortPing}</b><small>{T.sortHint}</small></div><Switch on={sortPing} onChange={setSortPing} /></div>
+          <div className="opt"><div><b>{T.startup}</b><small>{T.startupHint}</small></div><Switch on={startup} onChange={(v) => invoke('set_autostart', { on: v }).then(() => setStartup(v)).catch((e) => fail(errMsg(e)))} /></div>
+          <div className="opt"><div><b>{T.autoConnect}</b><small>{T.autoConnectHint}</small></div><Switch on={autoConnect} onChange={setAutoConnect} /></div>
         </Card>
         <Card className="set">
           <div className="set-t">{I.palette}{T.appearance}</div>
@@ -691,16 +924,40 @@ export default function App() {
           </div>
           <div className="opt"><div><b>{T.reduce}</b><small>{T.reduceHint}</small></div><Switch on={reduce} onChange={setReduce} /></div>
         </Card>
-        <Card className="set">
-          <div className="set-t">{I.sub}{T.subscription}</div>
-          <div className="opt"><div><b>{nodes.length} {T.configs}</b><small>{T.lastUpdate}: {updatedText}</small></div>
-            <button className="btn rp" onClick={updateConfigs} disabled={!!busy || status === 'connecting'}><span className={busy === 'fetch' ? 'spin' : ''}>{I.refresh}</span>{busy === 'fetch' ? T.fetching : T.getConfigs}</button>
+        <Card className="set subs">
+          <div className="set-t">{I.sub}{T.subscription}<span className="set-badge mono">{nodes.length}</span></div>
+          <div className="src-list">
+            {sources.map((x) => (
+              <div key={x.id} className={`src-row ${subOff.includes(x.id) ? 'off' : ''}`}>
+                <span className={`src-ic ${x.kind}`}>{x.kind === 'own' ? I.lock : I.radar}</span>
+                <div className="src-txt"><b dir="auto">{x.name}</b><small>{x.kind === 'own' ? T.srcOwnHint : T.srcPubHint(topN)}</small></div>
+                {!x.builtin && <button className="tb sm" onClick={() => { setCustomSubs((c) => c.filter((y) => y.id !== x.id)); setSubOff((o) => o.filter((y) => y !== x.id)); }} data-tip={T.remove}>{I.x}</button>}
+                <Switch on={!subOff.includes(x.id)} onChange={(v) => setSubOff((o) => (v ? o.filter((y) => y !== x.id) : [...o, x.id]))} />
+              </div>
+            ))}
+          </div>
+          <form className="add-sub" onSubmit={(e) => { e.preventDefault(); addSub(); }}>
+            <span className="as-ic">{I.plus}</span>
+            <input value={newSub} onChange={(e) => setNewSub(e.target.value)} placeholder={T.addSubPh} dir="ltr" spellCheck={false} />
+            <button className="btn sm accent rp" type="submit" disabled={!/^https?:\/\/\S+$/.test(newSub.trim())}>{T.add}</button>
+          </form>
+          <div className="opt"><div><b>{T.topN}</b><small>{T.topNHint}</small></div>
+            <div className="seg">
+              {[5, 10, 15, 20].map((v) => <button key={v} className={`mono ${topN === v ? 'on' : ''}`} onClick={() => setTopN(v)}>{v}</button>)}
+            </div>
+          </div>
+          <div className="sub-foot">
+            <small className="muted">{T.lastUpdate}: {updatedText}{lastScan ? ` · ${T.scanShort(lastScan.pool, lastScan.picked)}` : ''}</small>
+            <div className="row2">
+              <button className="btn rp" onClick={refetch} disabled={!!busy || status === 'connecting'}><span className={busy === 'fetch' ? 'spin' : ''}>{I.refresh}</span>{busy === 'fetch' ? T.fetching : T.getConfigs}</button>
+              <button className="btn accent rp" onClick={rescan} disabled={!!busy || status === 'connecting'}><span className={busy === 'scan' ? 'spin' : ''}>{I.radar}</span>{busy === 'scan' ? T.scanning : T.rescan}</button>
+            </div>
           </div>
         </Card>
         <Card className="set">
           <div className="set-t">{I.keyboard}{T.shortcuts}</div>
           <div className="keys">
-            {[[T.kPalette, 'Ctrl+K'], [T.kConnect, 'Ctrl+Enter'], [T.kConfigs, 'F5'], [T.kPing, 'Ctrl+T'], [T.kSearch, 'Ctrl+F'], [T.kPages, 'Ctrl+1-4'], [T.kFull, 'F11']].map(([a, k]) => (
+            {[[T.kPalette, 'Ctrl+K'], [T.kConnect, 'Ctrl+Enter'], [T.kConfigs, 'F5'], [T.kPing, 'Ctrl+T'], [T.kRescan, 'Ctrl+R'], [T.kSearch, 'Ctrl+F'], [T.kPages, 'Ctrl+1-4'], [T.kFull, 'F11']].map(([a, k]) => (
               <div key={k} className="krow"><span>{a}</span><Kbd k={k} /></div>
             ))}
           </div>
@@ -725,9 +982,9 @@ export default function App() {
         <button className="cmdk rp" onClick={() => setPal(true)}>{I.search}<span>{T.paletteHint}</span><Kbd k="Ctrl+K" /></button>
         <div className="win">
           <button className="wb" onClick={() => setLang(lang === 'fa' ? 'en' : 'fa')}><span className="wl">{lang === 'fa' ? 'EN' : 'فا'}</span></button>
-          <button className="wb" onClick={() => win.minimize()} aria-label="minimize">{I.min}</button>
+          <button className="wb" onClick={() => invoke('hide_main').catch(() => win.minimize())} aria-label="minimize" title={T.toTray}>{I.min}</button>
           <button className="wb" onClick={() => win.toggleMaximize()} aria-label="maximize">{maxed ? I.restore : I.max}</button>
-          <button className="wb x" onClick={() => win.close()} aria-label="close">{I.close}</button>
+          <button className="wb x" onClick={() => invoke('hide_main').catch(() => win.close())} aria-label="close" title={T.toTray}>{I.close}</button>
         </div>
       </header>
 

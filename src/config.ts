@@ -5,6 +5,11 @@ const env = (import.meta as any).env || {};
 const OWNER: string = env.VITE_GH_OWNER || 'YOUR_GITHUB_USERNAME';
 const CUSTOM: string = env.VITE_SUB_URL || '';
 const HAS_OWNER = OWNER !== 'YOUR_GITHUB_USERNAME';
+const REPO: string = env.VITE_GH_REPO || 'mahyarvpn';
+
+/** v2.4: بررسی نسخه‌ی جدید برنامه از ریلیزهای گیت‌هاب */
+export const RELEASE_API = HAS_OWNER ? `https://api.github.com/repos/${OWNER}/${REPO}/releases/latest` : '';
+export const RELEASE_PAGE = HAS_OWNER ? `https://github.com/${OWNER}/${REPO}/releases/latest` : '';
 
 export const SUB_URLS: string[] = [
   ...(CUSTOM ? [CUSTOM] : []),

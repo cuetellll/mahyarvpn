@@ -4,7 +4,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
 import { decodeSubscription, parseLinks, type VNode } from './parser';
 import { buildConfig } from './singbox';
-import { BUILTIN_SOURCES, DEFAULT_TOP_N, PROXY_PORT, type SubSource } from './config';
+import { BUILTIN_SOURCES, DEFAULT_TOP_N, PROXY_PORT, RELEASE_API, RELEASE_PAGE, type SubSource } from './config';
 import { smartScan, realTest, type ScanState } from './scan';
 import { t, type Lang } from './i18n';
 import { I } from './icons';
@@ -25,7 +25,9 @@ type CustomSub = { id: string; name: string; url: string };
 type LastScan = { pool: number; alive: number; tested: number; ok: number; picked: number; ms: number; at: number } | null;
 type Src = 'own' | 'pub';
 
-const VERSION = '2.3.0';
+const VERSION = '2.4.0';
+/** مقایسه‌ی نسخه: a > b ؟ */
+const newer = (a: string, b: string) => { const x = a.replace(/^v/, '').split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); } return false; };
 const HIST = 90;
 const PAGES: Page[] = ['home', 'servers', 'stats', 'settings'];
 const THEMES: Record<Theme, [string, string]> = {
@@ -136,6 +138,12 @@ export default function App() {
   const [picks, setPicks] = useState<string[]>(() => load('picks', []));
   const [lastScan, setLastScan] = useState<LastScan>(() => load('lastScan', null));
   const [scan, setScan] = useState<ScanState | null>(null);
+  // v2.4
+  const [manual, setManual] = useState<string[]>(() => load('manual', []));
+  const [importOpen, setImportOpen] = useState(false);
+  const [importText, setImportText] = useState('');
+  const [upd, setUpd] = useState<'' | 'checking' | 'latest' | string>('');
+  const importRef = useRef<HTMLTextAreaElement>(null);
   const [newSub, setNewSub] = useState('');
   const poolRef = useRef<VNode[] | null>(null);
   const [startup, setStartup] = useState(false);
@@ -221,6 +229,8 @@ export default function App() {
   useEffect(() => save('srcOf', srcOf), [srcOf]);
   useEffect(() => save('picks', picks), [picks]);
   useEffect(() => save('lastScan', lastScan), [lastScan]);
+  useEffect(() => save('manual', manual), [manual]);
+  useEffect(() => { if (importOpen) window.setTimeout(() => importRef.current?.focus(), 40); }, [importOpen]);
   useEffect(() => { invoke<boolean>('get_autostart').then(setStartup).catch(() => {}); }, []);
   useEffect(() => {
     document.documentElement.dir = lang === 'fa' ? 'rtl' : 'ltr';
@@ -237,7 +247,8 @@ export default function App() {
     const onKey = async (e: KeyboardEvent) => {
       const k = e.key.toLowerCase();
       if (e.key === 'F11') { e.preventDefault(); await win.setFullscreen(!(await win.isFullscreen())); }
-      if (e.key === 'Escape') { setPal(false); if (await win.isFullscreen()) await win.setFullscreen(false); }
+      if (e.ctrlKey && k === 'i') { e.preventDefault(); setImportOpen(true); }
+      if (e.key === 'Escape') { setPal(false); setImportOpen(false); if (await win.isFullscreen()) await win.setFullscreen(false); }
       if (e.key === 'F5') { e.preventDefault(); actions.current.updateConfigs(); }
       if (e.ctrlKey && e.key === 'Enter') { e.preventDefault(); actions.current.toggle(); }
       if (e.ctrlKey && k === 't') { e.preventDefault(); actions.current.testAll(); }
@@ -377,6 +388,9 @@ export default function App() {
       } else {
         ({ own, pub, skipped, failed } = await fetchSources());
         poolRef.current = pub;
+        // کانفیگ‌های دستی (v2.4) همیشه جزو شخصی‌ها می‌مونن
+        const oid = new Set(own.map((n) => n.id));
+        own = [...own, ...parseLinks(manual).nodes.filter((n) => !oid.has(n.id))];
       }
       const ownIds = new Set(own.map((n) => n.id));
       pub = pub.filter((n) => !ownIds.has(n.id));
@@ -553,6 +567,48 @@ export default function App() {
     showToast(T.subAdded, 'ok');
   }
 
+  /* ---------- v2.4: افزودن دستی، کپی کانفیگ، بررسی آپدیت ---------- */
+  async function importConfigs() {
+    const p = parseLinks(decodeSubscription(importText));
+    const added = p.nodes.filter((n) => !nodes.some((x) => x.id === n.id));
+    if (!p.nodes.length) return fail(T.importNone);
+    setManual((m) => Array.from(new Set([...m, ...p.nodes.map((n) => n.link)])));
+    setLinks((l) => Array.from(new Set([...l, ...added.map((n) => n.link)])));
+    setSrcOf((x) => { const y = { ...x }; p.nodes.forEach((n) => (y[n.id] = 'own')); return y; });
+    if (!selected && added[0]) setSelected(added[0].id);
+    setImportOpen(false); setImportText('');
+    showToast(T.imported(p.nodes.length), 'ok');
+    if (added.length && !busy && status !== 'connected') {
+      setBusy('test');
+      const r = await runTest(added).catch(() => ({} as Record<string, number>));
+      setPings((x) => ({ ...x, ...r }));
+      setBusy('');
+    }
+  }
+  async function pasteClip() {
+    try { const v = await navigator.clipboard.readText(); if (v) setImportText((t0) => (t0 ? `${t0.trimEnd()}\n${v}` : v)); } catch { showToast(T.clipFail, 'err'); }
+  }
+  const copyCfg = (n?: VNode) => { if (n) navigator.clipboard?.writeText(n.link).then(() => showToast(T.cfgCopied, 'ok')).catch(() => {}); };
+  function clearManual() {
+    const ids = new Set(parseLinks(manual).nodes.map((n) => n.id));
+    setLinks((l) => parseLinks(l).nodes.filter((n) => !ids.has(n.id) || n.id === activeId).map((n) => n.link));
+    setManual([]);
+    showToast(T.manualCleared, 'ok');
+  }
+  async function checkUpdate(silent = false) {
+    if (!RELEASE_API) { if (!silent) showToast(T.noRepo, 'err'); return; }
+    setUpd('checking');
+    try {
+      const j = JSON.parse(await invoke<string>('fetch_text', { urls: [RELEASE_API] }));
+      const tag = String(j.tag_name || '').replace(/^v/, '');
+      if (tag && newer(tag, VERSION)) { setUpd(tag); showToast(T.newVer(tag), 'ok'); }
+      else { setUpd('latest'); if (!silent) showToast(T.upToDate(VERSION), 'ok'); }
+    } catch { setUpd(''); if (!silent) showToast(T.updFail, 'err'); }
+  }
+  const openRelease = () => invoke('open_url', { url: RELEASE_PAGE }).catch((e) => showToast(errMsg(e), 'err'));
+  useEffect(() => { const id = window.setTimeout(() => checkUpdate(true), 4000); return () => window.clearTimeout(id); }, []); // eslint-disable-line
+  const hasUpd = upd !== '' && upd !== 'checking' && upd !== 'latest';
+
   const toggleFav = (id: string) => setFavs((f) => (f.includes(id) ? f.filter((x) => x !== id) : [...f, id]));
   const copyIp = () => {
     if (ip && typeof ip === 'object') navigator.clipboard?.writeText(ip.query).then(() => showToast(T.copied, 'ok')).catch(() => {});
@@ -609,8 +665,10 @@ export default function App() {
       tooltip: `MahyarVPN · ${status === 'connected' ? T.connected : status === 'connecting' ? T.connecting : T.idle}${activeLabel ? ` · ${activeLabel}` : ''}`,
     }).catch(() => {});
   }, [status, lang, activeLabel]); // eslint-disable-line
-  const mins = fetchedAt ? Math.floor((now - fetchedAt) / 60000) : -1;
+  const mins = fetchedAt ? Math.max(0, Math.floor((now - fetchedAt) / 60000)) : -1;
   const updatedText = mins < 0 ? T.never : mins < 1 ? T.justNow : T.ago(mins);
+  const fresh = mins < 0 ? 'bad' : mins < 60 ? 'good' : mins < 360 ? 'mid' : 'bad';
+  const freshText = fresh === 'good' ? T.fresh : fresh === 'mid' ? T.aging : T.stale;
   const downs = hist.map((x) => x.d), ups = hist.map((x) => x.u);
   const peak = downs.length ? Math.max(...downs) : 0;
   const avg = downs.length ? downs.reduce((a, b) => a + b, 0) / downs.length : 0;
@@ -630,6 +688,8 @@ export default function App() {
       { id: 'fast', group: T.actions, icon: I.bolt, label: T.fastest, run: connectFastest },
       { id: 'cfg', group: T.actions, icon: I.refresh, label: T.getConfigs, hint: 'F5', run: refetch },
       { id: 'scan', group: T.actions, icon: I.radar, label: T.rescan, hint: 'Ctrl+R', run: rescan },
+      { id: 'imp', group: T.actions, icon: I.paste, label: T.importCfg, hint: 'Ctrl+I', run: () => setImportOpen(true) },
+      { id: 'upd', group: T.actions, icon: I.rocket, label: T.checkUpd, run: () => checkUpdate() },
       { id: 'ping', group: T.actions, icon: I.pulse, label: T.testPing, hint: 'Ctrl+T', run: testAll },
       { id: 'mode', group: T.actions, icon: mode === 'tun' ? I.proxy : I.cpu, label: `${T.switchMode} ${mode === 'tun' ? 'Proxy' : 'TUN'}`, run: () => status === 'idle' && setMode(mode === 'tun' ? 'proxy' : 'tun') },
       { id: 'lang', group: T.actions, icon: I.lang, label: T.toggleLang, run: () => setLang(lang === 'fa' ? 'en' : 'fa') },
@@ -676,6 +736,32 @@ export default function App() {
       </Card>
 
       <div className="side">
+        {/* v2.4 · کارهای سریع: دریافت کانفیگ همیشه دم دسته */}
+        <Card className="dock">
+          {hasUpd && (
+            <button className="upd-pill rp" onClick={openRelease}>{I.rocket}<span>{T.newVer(upd)}</span><b>{T.download}</b></button>
+          )}
+          <button className={`get-cfg rp ${busy === 'fetch' || busy === 'scan' ? 'busy' : ''}`} onClick={refetch} disabled={!!busy || status === 'connecting'}>
+            <span className="gc-ic"><span className={busy === 'fetch' || busy === 'scan' ? 'spin' : ''}>{I.refresh}</span></span>
+            <span className="gc-tx">
+              <b>{busy === 'fetch' ? T.fetching : busy === 'scan' ? T.scanning : T.getConfigs}</b>
+              <small title={freshText}><i className={`fr ${fresh}`} />{mins < 0 ? T.getConfigsSub : updatedText}{nodes.length ? ` · ${nodes.length} ${T.configs}` : ''}</small>
+            </span>
+            <kbd className="gc-k">F5</kbd>
+          </button>
+          <div className="acts">
+            <button className="act rp" onClick={rescan} disabled={!!busy || status === 'connecting'} title="Ctrl+R">
+              <span className={busy === 'scan' ? 'spin' : ''}>{I.radar}</span><span>{T.rescan}</span>
+            </button>
+            <button className="act rp" onClick={testAll} disabled={!!busy || status === 'connecting' || !nodes.length} title="Ctrl+T">
+              <span className={busy === 'test' ? 'pulse' : ''}>{I.pulse}</span><span>{busy === 'test' ? T.testing : T.testPing}</span>
+            </button>
+            <button className="act rp" onClick={() => setImportOpen(true)} title="Ctrl+I">
+              {I.paste}<span>{T.importCfg}</span>
+            </button>
+          </div>
+        </Card>
+
         {scan ? (
         <Card className="srv-card scan-card"><ScanPanel s={scan} T={T} compact /></Card>
         ) : !nodes.length ? (
@@ -683,7 +769,6 @@ export default function App() {
           <div className="eh-ic">{I.servers}</div>
           <b>{T.noConfigs}</b>
           <small>{T.emptyHint}</small>
-          <button className="btn accent rp" onClick={refetch} disabled={!!busy}><span className={busy === 'fetch' ? 'spin' : ''}>{I.refresh}</span>{busy === 'fetch' ? T.fetching : T.getConfigs}</button>
         </Card>
         ) : (
         <Card className="srv-card">
@@ -707,14 +792,17 @@ export default function App() {
               ); })}
             </div>
           )}
-          <div className="row2">
+          <div className="row3">
             <button className="btn rp" onClick={() => setPage('servers')}>{I.servers}{T.change}</button>
+            <button className="btn sq rp" onClick={() => copyCfg(shownNode)} disabled={!shownNode} title={T.copyCfg} aria-label={T.copyCfg}>{I.copy}</button>
             <button className="btn accent rp" onClick={connectFastest} disabled={!!busy || status === 'connecting' || !nodes.length}>{I.bolt}{T.fastest}</button>
           </div>
         </Card>
         )}
 
-        <div className={`tiles ${status === 'connected' ? '' : 'dimmed'}`}>
+        {status === 'connected' ? (
+        <>
+        <div className="tiles">
           <Card className="tile dl">
             <div className="tile-h"><span className="ti">{I.down}</span>{T.down}</div>
             <div className="tile-v mono"><Count value={speed.down} fmt={(v) => fmtBytes(v)} /><small>/s</small></div>
@@ -726,7 +814,6 @@ export default function App() {
             <Area id="su" n={30} h={36} series={[{ data: ups, color: '#ff4fd8' }]} />
           </Card>
         </div>
-
         <Card className="info">
           <button className="info-row rp" onClick={copyIp} disabled={!ip || typeof ip !== 'object'}>
             <span className="ii">{I.globe}</span>
@@ -741,13 +828,23 @@ export default function App() {
           <div className="info-row">
             <span className="ii">{I.lock}</span>
             <span className="info-k">{T.mode}</span>
-            <div className="mini-seg">
-              <button className={mode === 'tun' ? 'on' : ''} disabled={status !== 'idle'} onClick={() => setMode('tun')}>TUN</button>
-              <button className={mode === 'proxy' ? 'on' : ''} disabled={status !== 'idle'} onClick={() => setMode('proxy')}>Proxy</button>
-              <span className="ms-glow" data-p={mode} />
-            </div>
+            <span className="info-v mono">{mode.toUpperCase()}</span>
           </div>
         </Card>
+        </>
+        ) : (
+        <Card className="mode-card">
+          <div className="lbl">{T.modeTitle}</div>
+          <div className="mode-pick">
+            {(['tun', 'proxy'] as Mode[]).map((m) => (
+              <button key={m} className={`mp rp ${mode === m ? 'on' : ''}`} disabled={status !== 'idle'} onClick={() => setMode(m)}>
+                <span className="mp-ic">{m === 'tun' ? I.cpu : I.proxy}</span>
+                <span className="mp-tx"><b>{m === 'tun' ? 'TUN' : 'Proxy'}</b><small>{m === 'tun' ? T.tunHint : T.proxyHint}</small></span>
+              </button>
+            ))}
+          </div>
+        </Card>
+        )}
       </div>
     </div>
   );
@@ -947,7 +1044,11 @@ export default function App() {
             </div>
           </div>
           <div className="sub-foot">
-            <small className="muted">{T.lastUpdate}: {updatedText}{lastScan ? ` · ${T.scanShort(lastScan.pool, lastScan.picked)}` : ''}</small>
+            <small className="muted">{T.lastUpdate}: {updatedText}{lastScan ? ` · ${T.scanShort(lastScan.pool, lastScan.picked)}` : ''}{manual.length ? ` · ${T.manualCount(manual.length)}` : ''}</small>
+            <div className="row2">
+              <button className="btn rp" onClick={() => setImportOpen(true)}>{I.paste}{T.importCfg}</button>
+              <button className="btn ghost rp" onClick={clearManual} disabled={!manual.length}>{I.x}{T.clearManual}</button>
+            </div>
             <div className="row2">
               <button className="btn rp" onClick={refetch} disabled={!!busy || status === 'connecting'}><span className={busy === 'fetch' ? 'spin' : ''}>{I.refresh}</span>{busy === 'fetch' ? T.fetching : T.getConfigs}</button>
               <button className="btn accent rp" onClick={rescan} disabled={!!busy || status === 'connecting'}><span className={busy === 'scan' ? 'spin' : ''}>{I.radar}</span>{busy === 'scan' ? T.scanning : T.rescan}</button>
@@ -957,14 +1058,17 @@ export default function App() {
         <Card className="set">
           <div className="set-t">{I.keyboard}{T.shortcuts}</div>
           <div className="keys">
-            {[[T.kPalette, 'Ctrl+K'], [T.kConnect, 'Ctrl+Enter'], [T.kConfigs, 'F5'], [T.kPing, 'Ctrl+T'], [T.kRescan, 'Ctrl+R'], [T.kSearch, 'Ctrl+F'], [T.kPages, 'Ctrl+1-4'], [T.kFull, 'F11']].map(([a, k]) => (
+            {[[T.kPalette, 'Ctrl+K'], [T.kConnect, 'Ctrl+Enter'], [T.kConfigs, 'F5'], [T.kPing, 'Ctrl+T'], [T.kRescan, 'Ctrl+R'], [T.kImport, 'Ctrl+I'], [T.kSearch, 'Ctrl+F'], [T.kPages, 'Ctrl+1-4'], [T.kFull, 'F11']].map(([a, k]) => (
               <div key={k} className="krow"><span>{a}</span><Kbd k={k} /></div>
             ))}
           </div>
         </Card>
         <Card className="set about">
           <div className="about-logo">{I.logo}</div>
-          <div><b>Mahyar<span className="grad">VPN</span> <span className="ver">v{VERSION}</span></b><small>{T.aboutText}</small></div>
+          <div className="about-tx"><b>Mahyar<span className="grad">VPN</span> <span className="ver">v{VERSION}</span></b><small>{T.aboutText}</small></div>
+          {hasUpd
+            ? <button className="btn accent rp" onClick={openRelease}>{I.download}{T.download} v{upd}</button>
+            : <button className="btn rp" onClick={() => checkUpdate()} disabled={upd === 'checking'}><span className={upd === 'checking' ? 'spin' : ''}>{upd === 'checking' ? I.refresh : I.rocket}</span>{upd === 'checking' ? T.checkingUpd : upd === 'latest' ? T.upToDate(VERSION) : T.checkUpd}</button>}
         </Card>
       </div>
     </div>
@@ -1037,6 +1141,23 @@ export default function App() {
               ))}
               {!palItems.length && <div className="empty small">{T.noMatch}</div>}
             </div>
+          </div>
+        </div>
+      )}
+
+      {importOpen && (
+        <div className="overlay" onClick={() => setImportOpen(false)}>
+          <div className="modal import" onClick={(e) => e.stopPropagation()}>
+            <div className="m-ic">{I.paste}</div>
+            <h3>{T.importTitle}</h3>
+            <p>{T.importHint}</p>
+            <textarea ref={importRef} value={importText} onChange={(e) => setImportText(e.target.value)} placeholder={T.importPh} dir="ltr" spellCheck={false}
+              onKeyDown={(e) => { if (e.ctrlKey && e.key === 'Enter') { e.preventDefault(); importConfigs(); } }} />
+            <div className="row2">
+              <button className="btn rp" onClick={pasteClip}>{I.paste}{T.pasteClip}</button>
+              <button className="btn accent rp" onClick={importConfigs} disabled={!importText.trim()}>{I.plus}{T.importBtn}</button>
+            </div>
+            <button className="btn ghost" onClick={() => setImportOpen(false)}>{T.cancel}</button>
           </div>
         </div>
       )}

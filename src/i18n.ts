@@ -35,6 +35,13 @@ const fa = {
   srcOwn: 'شخصی', srcPub: 'برترین‌ها', srcOwnHint: 'همه‌ی کانفیگ‌هاش میاد', srcPubHint: (n: number) => `فقط ${n} تای کم‌پینگ با نت تو`,
   addSubPh: 'لینک ساب جدید... https://', add: 'افزودن', remove: 'حذف', subAdded: 'ساب اضافه شد، «اسکن دوباره» یا «دریافت کانفیگ» رو بزن', subExists: 'این ساب از قبل هست',
   topN: 'تعداد کانفیگ از ساب عمومی', topNHint: 'بعد از تست، فقط این تعداد از سریع‌ترین‌ها نگه داشته میشن', kRescan: 'اسکن دوباره',
+  // v2.4
+  quickActions: 'کارهای سریع', getConfigsSub: 'لیست سرورها رو تازه کن', fresh: 'تازه', stale: 'قدیمی شده، بروز کن', aging: 'چند ساعت گذشته',
+  importCfg: 'افزودن کانفیگ', importTitle: 'افزودن کانفیگ دستی', importHint: 'لینک vless / vmess / trojan / ss / hy2 یا لینک ساب base64 رو اینجا بچسبون. هر خط یه کانفیگ.',
+  importPh: 'vless://...', pasteClip: 'چسباندن از کلیپ‌بورد', importBtn: 'افزودن به لیست', imported: (n: number) => `${n} کانفیگ اضافه شد`, importNone: 'کانفیگ معتبری توی متن نبود', clipFail: 'کلیپ‌بورد خونده نشد، خودت Ctrl+V بزن',
+  copyCfg: 'کپی کانفیگ', cfgCopied: 'کانفیگ کپی شد', modeTitle: 'حالت اتصال', lockedWhileOn: 'برای تغییر، اول قطع کن',
+  checkUpd: 'بررسی نسخه‌ی جدید', checkingUpd: 'در حال بررسی...', upToDate: (v: string) => `آخرین نسخه رو داری (v${v})`, newVer: (v: string) => `نسخه‌ی جدید v${v} اومده`, updFail: 'بررسی آپدیت ناموفق بود', download: 'دانلود', noRepo: 'آدرس ریپو تنظیم نشده (فقط در بیلد گیت‌هاب)', kImport: 'افزودن کانفیگ',
+  manualCount: (n: number) => `${n} کانفیگ دستی`, clearManual: 'پاک کردن دستی‌ها', manualCleared: 'کانفیگ‌های دستی پاک شدن',
 
 };
 type Dict = typeof fa;
@@ -73,6 +80,13 @@ const en: Dict = {
   srcOwn: 'Private', srcPub: 'Top picks', srcOwnHint: 'All configs are kept', srcPubHint: (n) => `Only the ${n} lowest-ping on your network`,
   addSubPh: 'New subscription URL... https://', add: 'Add', remove: 'Remove', subAdded: 'Added. Hit Rescan or Get configs', subExists: 'Already added',
   topN: 'Configs kept from public subs', topNHint: 'After testing, only this many of the fastest are kept', kRescan: 'Rescan',
+  // v2.4
+  quickActions: 'Quick actions', getConfigsSub: 'Refresh the server list', fresh: 'Fresh', stale: 'Outdated, refresh it', aging: 'A few hours old',
+  importCfg: 'Add config', importTitle: 'Add configs manually', importHint: 'Paste vless / vmess / trojan / ss / hy2 links or a base64 subscription. One config per line.',
+  importPh: 'vless://...', pasteClip: 'Paste from clipboard', importBtn: 'Add to list', imported: (n) => `${n} configs added`, importNone: 'No valid config in the text', clipFail: "Couldn't read clipboard, press Ctrl+V",
+  copyCfg: 'Copy config', cfgCopied: 'Config copied', modeTitle: 'Connection mode', lockedWhileOn: 'Disconnect to change',
+  checkUpd: 'Check for updates', checkingUpd: 'Checking...', upToDate: (v) => `You're up to date (v${v})`, newVer: (v) => `New version v${v} is out`, updFail: 'Update check failed', download: 'Download', noRepo: 'Repo not set (GitHub builds only)', kImport: 'Add config',
+  manualCount: (n) => `${n} manual configs`, clearManual: 'Clear manual', manualCleared: 'Manual configs cleared',
 
 };
 export const t: Record<Lang, Dict> = { fa, en };

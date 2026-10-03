@@ -419,6 +419,15 @@ async fn fetch_text(urls: Vec<String>) -> Result<String, String> {
     .map_err(err)?
 }
 
+/// v2.4: باز کردن صفحه‌ی ریلیز توی مرورگر پیش‌فرض (فقط لینک‌های github.com)
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    if !url.starts_with("https://github.com/") {
+        return Err("blocked url".into());
+    }
+    Command::new("explorer.exe").arg(&url).spawn().map(|_| ()).map_err(err)
+}
+
 /// ترافیک کل (آپلود، دانلود) از Clash API هسته‌ی اصلی
 #[tauri::command]
 async fn core_stats() -> Result<(u64, u64), String> {
@@ -684,6 +693,7 @@ fn main() {
             test_delays,
             tcp_ping,
             fetch_text,
+            open_url,
             is_admin,
             relaunch_admin,
             core_stats,

@@ -1,6 +1,6 @@
 [package]
 name = "mahyarvpn"
-version = "2.3.0"
+version = "2.4.0"
 description = "MahyarVPN - sing-box based VPN client"
 edition = "2021"
 

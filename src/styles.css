@@ -685,3 +685,46 @@ html[dir='rtl'] .add-sub { padding: 0 12px 0 5px; }
   .toasts { top: 52px; bottom: auto !important; }
   .acts .act { height: 58px; font-size: 12px; }
 }
+
+/* =========================================================
+   v2.5 · صفحه‌ی اصلی ساده: کارت مدل + سوییچ Proxy / Tunnel
+   ========================================================= */
+.side.simple { justify-content: center; gap: 14px; }
+.model-card { padding: 14px; display: flex; flex-direction: column; gap: 10px; animation-delay: .06s; }
+.model-card .lbl { margin-bottom: 0; }
+.model-btn, .mm-opt { position: relative; display: flex; align-items: center; gap: 12px; width: 100%; padding: 14px; border-radius: 16px; text-align: start;
+  background: var(--glass-2); border: 1px solid var(--line-2); transition: border-color .25s, background .25s, transform .3s var(--spring); }
+.model-btn > *:not(.ripple), .mm-opt > *:not(.ripple) { position: relative; z-index: 1; }
+.model-btn:hover:not(:disabled), .mm-opt:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--a1) 55%, transparent); }
+.mb-ic { width: 44px; height: 44px; border-radius: 14px; flex-shrink: 0; display: grid; place-items: center; color: #fff;
+  background: linear-gradient(135deg, var(--a1), var(--a2)); box-shadow: 0 6px 20px color-mix(in srgb, var(--a1) 40%, transparent); }
+.mb-ic.m2 { background: linear-gradient(135deg, #22d3ee, #10f5a8); box-shadow: 0 6px 20px rgba(16, 245, 168, .3); }
+.mb-ic .ic { width: 22px; height: 22px; }
+.mb-tx { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
+.mb-tx b { font-size: 15px; } .mb-tx small { font-size: 12px; color: var(--muted); line-height: 1.6; overflow: hidden; text-overflow: ellipsis; }
+.mb-tx small em { font-style: normal; color: var(--good); }
+.mb-chev { display: flex; align-items: center; gap: 4px; padding: 5px 12px; border-radius: 10px; font-size: 12px; font-weight: 650; color: var(--text); background: rgba(255,255,255,.07); }
+.mini-scan { margin-top: 2px; }
+
+/* سوییچ دو حالته‌ی Proxy / Tunnel */
+.seg { position: relative; display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; border-radius: 16px; background: rgba(0,0,0,.28); border: 1px solid var(--line); }
+.seg-ind { position: absolute; top: 4px; bottom: 4px; width: calc(50% - 6px); inset-inline-start: 4px; border-radius: 12px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--a1) 40%, transparent), color-mix(in srgb, var(--a2) 30%, transparent));
+  border: 1px solid color-mix(in srgb, var(--a1) 65%, transparent); box-shadow: 0 0 22px color-mix(in srgb, var(--a1) 25%, transparent);
+  transition: transform .45s var(--spring); }
+html[dir='ltr'] .seg[data-on='tun'] .seg-ind { transform: translateX(calc(100% + 4px)); }
+html[dir='rtl'] .seg[data-on='tun'] .seg-ind { transform: translateX(calc(-100% - 4px)); }
+.seg-b { position: relative; z-index: 1; display: flex; align-items: center; gap: 10px; padding: 12px; border-radius: 12px; text-align: start; color: var(--muted); transition: color .25s; }
+.seg-b.on { color: var(--text); }
+.seg-b:disabled { opacity: .7; }
+.seg-ic { width: 32px; height: 32px; border-radius: 10px; flex-shrink: 0; display: grid; place-items: center; background: rgba(255,255,255,.06); }
+.seg-b.on .seg-ic { color: #fff; background: linear-gradient(135deg, var(--a1), var(--a2)); }
+.seg-tx { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.seg-tx b { font-size: 13.5px; } .seg-tx small { font-size: 11px; line-height: 1.5; color: var(--dim); }
+
+/* پنجره‌ی انتخاب مدل */
+.modal.model-modal { width: min(440px, 100%); gap: 12px; }
+.mm-opt.on { border-color: color-mix(in srgb, var(--a1) 70%, transparent); background: color-mix(in srgb, var(--a1) 12%, transparent); }
+.mm-opt.on .mc-check { opacity: 1; transform: none; }
+.mm-sub { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: -4px; }
+@media (max-width: 760px) { .seg-tx small { display: none; } .mb-tx small { white-space: nowrap; } }

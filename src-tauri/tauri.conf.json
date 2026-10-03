@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "MahyarVPN",
   "mainBinaryName": "mahyarvpn",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "identifier": "com.mahyar.vpn",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -42,7 +42,8 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "bin/sing-box.exe": "sing-box.exe"
+      "bin/sing-box.exe": "sing-box.exe",
+      "bin/aether.exe": "aether.exe"
     },
     "windows": {
       "nsis": {

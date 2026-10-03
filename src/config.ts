@@ -47,6 +47,8 @@ export const BUILTIN_SOURCES: SubSource[] = [
 export const DEFAULT_TOP_N = 10;
 
 export const PROXY_PORT = 12334;
+/** v2.5 · مدل ۲: SOCKS5 محلی که Aether باز می‌کنه (کاربر هیچ‌وقت دستی واردش نمی‌کنه) */
+export const AETHER_PORT = 1819;
 export const API_PORT = 12335;
 export const TEST_URL = 'https://www.gstatic.com/generate_204';
 export const TEST_TIMEOUT = 5000;

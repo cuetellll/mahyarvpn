@@ -1,5 +1,20 @@
 import type { VNode } from './parser';
-import { API_PORT } from './config';
+import { API_PORT, AETHER_PORT } from './config';
+
+/**
+ * v2.5 · مدل ۲: یه «سرور» مجازی که خروجیش SOCKS5 محلی Aether هست.
+ * sing-box همون TUN / پروکسی ویندوز رو می‌سازه و همه‌چی رو می‌فرسته توی Aether.
+ */
+export const AETHER_ID = 'aether';
+export const AETHER_NODE: VNode = {
+  id: AETHER_ID,
+  link: '',
+  name: 'Aether · WireGuard',
+  protocol: 'wireguard',
+  server: '127.0.0.1',
+  port: AETHER_PORT,
+  outbound: { type: 'socks', server: '127.0.0.1', server_port: AETHER_PORT, version: '5' },
+};
 
 const clean = (o: any) => JSON.parse(JSON.stringify(o)); // undefined ها حذف میشن
 
@@ -20,11 +35,24 @@ export function buildConfig(node: VNode, mode: 'tun' | 'proxy', port: number) {
       stack: 'mixed',
     });
   }
+  const aether = node.id === AETHER_ID;
+  const rules: any[] = [
+    { action: 'sniff' },
+    // ترافیک خود aether.exe (WireGuard به Cloudflare + DNS خودش) نباید دوباره بره توی تونل، وگرنه حلقه میشه
+    ...(aether ? [{ process_name: ['aether.exe'], outbound: 'direct' }] : []),
+    { protocol: 'dns', action: 'hijack-dns' },
+    { ip_is_private: true, outbound: 'direct' },
+    // SOCKS5 Aether فقط TCP رو مطمئن رد می‌کنه؛ QUIC رد میشه تا مرورگر سریع برگرده روی TCP
+    ...(aether ? [{ network: 'udp', port: 443, action: 'reject' }] : []),
+  ];
   return clean({
     log: { level: 'warn', timestamp: true },
     dns: {
       servers: [
-        { type: 'https', tag: 'dns-remote', server: '1.1.1.1', detour: 'proxy' },
+        // مدل ۲: DNS روی TCP از داخل Aether (DoH هم TCP هست، ولی ساده‌تر و سبک‌تر)
+        aether
+          ? { type: 'tcp', tag: 'dns-remote', server: '1.1.1.1', detour: 'proxy' }
+          : { type: 'https', tag: 'dns-remote', server: '1.1.1.1', detour: 'proxy' },
         { type: 'local', tag: 'dns-local' },
       ],
       final: 'dns-remote',
@@ -36,11 +64,7 @@ export function buildConfig(node: VNode, mode: 'tun' | 'proxy', port: number) {
       { type: 'direct', tag: 'direct' },
     ],
     route: {
-      rules: [
-        { action: 'sniff' },
-        { protocol: 'dns', action: 'hijack-dns' },
-        { ip_is_private: true, outbound: 'direct' },
-      ],
+      rules,
       final: 'proxy',
       auto_detect_interface: true,
       default_domain_resolver: 'dns-local',

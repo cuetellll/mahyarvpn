@@ -19,7 +19,7 @@ const fa = {
   stepTest: 'پیدا کردن سریع‌ترین سرور', stepStart: 'ساختن تونل رمزنگاری‌شده', stepSwitch: 'تعویض سرور',
   noMatch: 'سروری با این فیلتر پیدا نشد', change: 'تغییر', fastest: 'وصل به سریع‌ترین', current: 'سرور فعلی', location: 'موقعیت',
   mode: 'حالت اتصال', connection: 'اتصال', appearance: 'ظاهر', theme: 'رنگ تم', language: 'زبان', reduce: 'کاهش انیمیشن', reduceHint: 'برای سیستم‌های ضعیف',
-  subscription: 'ساب‌اسکریپشن', configs: 'کانفیگ', shortcuts: 'میانبرهای کیبورد', about: 'درباره', aboutText: 'کلاینت VPN ویندوز بر پایه‌ی sing-box',
+  subscription: 'ساب‌اسکریپشن', configs: 'کانفیگ', shortcuts: 'میانبرهای کیبورد', about: 'درباره', aboutText: 'کلاینت VPN ویندوز بر پایه‌ی sing-box و Aether',
   liveTraffic: 'ترافیک زنده', pingDist: 'توزیع پینگ سرورها', protoMix: 'پروتکل‌ها', session: 'جلسه‌ی فعلی', notConnectedYet: 'وصل شو تا آمار زنده بیاد',
   palette: 'دنبال چی می‌گردی؟ دستور یا سرور...', paletteHint: 'جستجو یا پرش', actions: 'دستورات', goTo: 'برو به', switchMode: 'تغییر حالت به', toggleLang: 'English',
   themes: { violet: 'بنفش نئونی', cyan: 'آبی یخی', emerald: 'زمردی', sunset: 'غروب' },
@@ -42,6 +42,14 @@ const fa = {
   copyCfg: 'کپی کانفیگ', cfgCopied: 'کانفیگ کپی شد', modeTitle: 'حالت اتصال', lockedWhileOn: 'برای تغییر، اول قطع کن',
   checkUpd: 'بررسی نسخه‌ی جدید', checkingUpd: 'در حال بررسی...', upToDate: (v: string) => `آخرین نسخه رو داری (v${v})`, newVer: (v: string) => `نسخه‌ی جدید v${v} اومده`, updFail: 'بررسی آپدیت ناموفق بود', download: 'دانلود', noRepo: 'آدرس ریپو تنظیم نشده (فقط در بیلد گیت‌هاب)', kImport: 'افزودن کانفیگ',
   manualCount: (n: number) => `${n} کانفیگ دستی`, clearManual: 'پاک کردن دستی‌ها', manualCleared: 'کانفیگ‌های دستی پاک شدن',
+  // v2.5 · صفحه‌ی اصلی ساده + انتخاب مدل
+  model: 'مدل اتصال', chooseModel: 'انتخاب مدل', changeModel: 'تغییر مدل',
+  model1: 'مدل ۱ · سرورهای اختصاصی', model1Hint: 'کانفیگ‌ها از گیت‌هاب گرفته میشن و خودکار به بهترین سرور وصل میشی',
+  model2: 'مدل ۲ · Aether', model2Hint: 'بدون نیاز به کانفیگ. مسیر آزاد خودکار پیدا میشه (WireGuard · Balanced · IPv4)',
+  autoBest: 'خودکار: بهترین سرور', pickServer: 'انتخاب دستی سرور',
+  tunnelMode: 'Tunnel Mode', proxyMode: 'Proxy Mode', tunShort: 'کل سیستم', proxyShort: 'فقط مرورگر و برنامه‌های پروکسی‌دار',
+  stepAether: (s: number) => `پیدا کردن مسیر آزاد... ${s} ثانیه`, tapCancel: 'برای لغو دوباره بزن', cancelled: 'اتصال لغو شد',
+  aetherErr: 'Aether مسیری پیدا نکرد', advanced: 'ابزارهای پیشرفته در صفحه‌ی سرورها',
 
 };
 type Dict = typeof fa;
@@ -64,7 +72,7 @@ const en: Dict = {
   stepTest: 'Finding the fastest server', stepStart: 'Building encrypted tunnel', stepSwitch: 'Switching server',
   noMatch: 'No server matches this filter', change: 'Change', fastest: 'Connect fastest', current: 'Current server', location: 'Location',
   mode: 'Connection mode', connection: 'Connection', appearance: 'Appearance', theme: 'Theme', language: 'Language', reduce: 'Reduce motion', reduceHint: 'For low-end machines',
-  subscription: 'Subscription', configs: 'configs', shortcuts: 'Keyboard shortcuts', about: 'About', aboutText: 'Windows VPN client powered by sing-box',
+  subscription: 'Subscription', configs: 'configs', shortcuts: 'Keyboard shortcuts', about: 'About', aboutText: 'Windows VPN client powered by sing-box and Aether',
   liveTraffic: 'Live traffic', pingDist: 'Server latency distribution', protoMix: 'Protocols', session: 'Current session', notConnectedYet: 'Connect to see live stats',
   palette: 'Type a command or server...', paletteHint: 'Search or jump', actions: 'Actions', goTo: 'Go to', switchMode: 'Switch mode to', toggleLang: 'فارسی',
   themes: { violet: 'Neon violet', cyan: 'Ice blue', emerald: 'Emerald', sunset: 'Sunset' },
@@ -87,6 +95,14 @@ const en: Dict = {
   copyCfg: 'Copy config', cfgCopied: 'Config copied', modeTitle: 'Connection mode', lockedWhileOn: 'Disconnect to change',
   checkUpd: 'Check for updates', checkingUpd: 'Checking...', upToDate: (v) => `You're up to date (v${v})`, newVer: (v) => `New version v${v} is out`, updFail: 'Update check failed', download: 'Download', noRepo: 'Repo not set (GitHub builds only)', kImport: 'Add config',
   manualCount: (n) => `${n} manual configs`, clearManual: 'Clear manual', manualCleared: 'Manual configs cleared',
+  // v2.5
+  model: 'Connection model', chooseModel: 'Choose a model', changeModel: 'Change model',
+  model1: 'Model 1 · Private servers', model1Hint: 'Configs come from GitHub and you connect to the best server automatically',
+  model2: 'Model 2 · Aether', model2Hint: 'No configs needed. Finds a free route by itself (WireGuard · Balanced · IPv4)',
+  autoBest: 'Auto: best server', pickServer: 'Pick a server',
+  tunnelMode: 'Tunnel Mode', proxyMode: 'Proxy Mode', tunShort: 'Whole system', proxyShort: 'Browser and proxy-aware apps',
+  stepAether: (s) => `Finding a free route... ${s}s`, tapCancel: 'Tap again to cancel', cancelled: 'Connection cancelled',
+  aetherErr: 'Aether found no route', advanced: 'Advanced tools live on the Servers page',
 
 };
 export const t: Record<Lang, Dict> = { fa, en };

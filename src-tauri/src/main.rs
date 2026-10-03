@@ -2,9 +2,10 @@
 
 use std::{
     fs,
+    io::{Read, Write},
     path::PathBuf,
-    process::{Child, Command, Stdio},
-    sync::Mutex,
+    process::{Child, ChildStdin, Command, Stdio},
+    sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant},
 };
@@ -22,6 +23,10 @@ use std::os::windows::process::CommandExt;
 
 const PROXY_PORT: u16 = 12334;
 const API_PORT: u16 = 12335;
+/// v2.5 · مدل ۲: پورت SOCKS5 محلی Aether (همون پیش‌فرض خودش)
+const AETHER_PORT: u16 = 1819;
+/// سقف زمان پیدا کردن مسیر در حالت Balanced
+const AETHER_TIMEOUT_SECS: u64 = 180;
 
 #[derive(Default)]
 struct Core {
@@ -63,6 +68,24 @@ fn singbox_path(app: &AppHandle) -> Result<PathBuf, String> {
     c.into_iter()
         .find(|p| p.exists())
         .ok_or_else(|| "sing-box.exe not found (put it next to MahyarVPN.exe)".to_string())
+}
+
+/// aether.exe رو کنار برنامه، پوشه bin یا resources پیدا می‌کنه
+fn aether_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let mut c: Vec<PathBuf> = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            c.push(dir.join("aether.exe"));
+            c.push(dir.join("bin").join("aether.exe"));
+        }
+    }
+    if let Ok(r) = app.path().resource_dir() {
+        c.push(r.join("aether.exe"));
+    }
+    c.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("bin").join("aether.exe"));
+    c.into_iter()
+        .find(|p| p.exists())
+        .ok_or_else(|| "aether.exe not found (put it next to MahyarVPN.exe)".to_string())
 }
 
 fn tail(path: &PathBuf) -> String {
@@ -109,6 +132,252 @@ fn kill_core(core: &Core) {
     if let Some(mut c) = core.child.lock().unwrap().take() {
         let _ = c.kill();
         let _ = c.wait();
+    }
+}
+
+// ---------------- Model 2: Aether (WireGuard · Balanced · IPv4) ----------------
+// Aether خودش مسیر آزاد رو پیدا می‌کنه و یه SOCKS5 روی 127.0.0.1:1819 باز می‌کنه.
+// ما اون SOCKS رو مستقیم به sing-box وصل می‌کنیم (TUN یا پروکسی ویندوز)،
+// پس کاربر هیچ‌وقت لازم نیست 127.0.0.1:1819 رو جایی (مثل v2rayN) وارد کنه.
+
+#[derive(Default)]
+struct Aether {
+    child: Mutex<Option<Child>>,
+    stdin: Arc<Mutex<Option<ChildStdin>>>,
+}
+
+fn port_live(port: u16) -> bool {
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok()
+}
+
+fn aether_pid_file(app: &AppHandle) -> Option<PathBuf> {
+    data_dir(app).ok().map(|d| d.join("aether").join("aether.pid"))
+}
+
+fn kill_aether(app: &AppHandle) {
+    let a = app.state::<Aether>();
+    if let Some(mut c) = a.child.lock().unwrap().take() {
+        // Ctrl-C معادل نداره وقتی ترمینال نیست؛ مستقیم می‌بندیم (Aether هویت WARP رو روی دیسک نگه می‌داره)
+        let _ = c.kill();
+        let _ = c.wait();
+    }
+    *a.stdin.lock().unwrap() = None;
+    if let Some(p) = aether_pid_file(app) {
+        let _ = fs::remove_file(p);
+    }
+}
+
+/// اگه دفعه‌ی قبل برنامه کرش کرده و aether.exe یتیم مونده (و پورت 1819 رو گرفته)، فقط همون PID رو می‌بنده
+fn cleanup_stale_aether(app: &AppHandle) {
+    let Some(p) = aether_pid_file(app) else { return };
+    let Ok(pid) = fs::read_to_string(&p) else { return };
+    let pid = pid.trim().to_string();
+    if !pid.is_empty() && pid.chars().all(|c| c.is_ascii_digit()) {
+        #[cfg(windows)]
+        {
+            let filter = format!("PID eq {pid}");
+            let mut c = Command::new("taskkill");
+            c.args(["/F", "/FI", filter.as_str(), "/FI", "IMAGENAME eq aether.exe"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            hide(&mut c);
+            let _ = c.status();
+        }
+    }
+    let _ = fs::remove_file(p);
+}
+
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut it = s.chars().peekable();
+    while let Some(c) = it.next() {
+        if c == '\u{1b}' && it.peek() == Some(&'[') {
+            it.next();
+            for c2 in it.by_ref() {
+                if c2.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+            continue;
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// خروجی Aether رو توی aether.log می‌نویسه و اگه با وجود فلگ‌ها باز هم سؤالی پرسید،
+/// خودش جواب میده (WireGuard=2، Balanced=2، IPv4=1، اتصال سریع=y). کاربر هیچ ترمینالی نمی‌بینه.
+fn pump_aether<R: Read + Send + 'static>(
+    app: AppHandle,
+    mut r: R,
+    log: Arc<Mutex<fs::File>>,
+    stdin: Arc<Mutex<Option<ChildStdin>>>,
+) {
+    thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        let mut line = String::new();
+        let mut section: Option<&'static str> = None;
+        let mut answered: Vec<&'static str> = Vec::new();
+        loop {
+            let n = match r.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => n,
+            };
+            if let Ok(mut f) = log.lock() {
+                let _ = f.write_all(&buf[..n]);
+            }
+            line.push_str(&String::from_utf8_lossy(&buf[..n]));
+            while let Some(i) = line.find(['\n', '\r']) {
+                let l = strip_ansi(line[..i].trim());
+                line.drain(..=i);
+                if l.is_empty() {
+                    continue;
+                }
+                for (id, h) in [("protocol", "Protocol:"), ("scan", "Scan mode:"), ("ip", "IP version to scan:")] {
+                    if l.ends_with(h) {
+                        section = Some(id);
+                        answered.retain(|x| *x != id);
+                    }
+                }
+                let _ = app.emit("aether-log", &l);
+            }
+            if line.len() > 16 * 1024 {
+                line.clear();
+            }
+            // سؤال بدون newline: Aether منتظر ورودیه
+            let partial = strip_ansi(line.trim_end());
+            let answer: Option<(&'static str, &'static str)> = if partial.ends_with("[Y/n]:") || partial.ends_with("[y/N]:") {
+                Some(("reconnect", "y"))
+            } else if partial.ends_with(':') {
+                section.filter(|s| !answered.contains(s)).map(|s| match s {
+                    "protocol" => (s, "2"), // WireGuard
+                    "scan" => (s, "2"),     // Balanced
+                    _ => (s, "1"),          // IPv4
+                })
+            } else {
+                None
+            };
+            if let Some((id, a)) = answer {
+                if let Some(w) = stdin.lock().unwrap().as_mut() {
+                    let _ = w.write_all(format!("{a}\r\n").as_bytes());
+                    let _ = w.flush();
+                }
+                answered.push(id);
+                line.clear();
+            }
+        }
+    });
+}
+
+/// مدل ۲: Aether با WireGuard + Balanced + IPv4 بالا میاد و تا وقتی SOCKS5 روی 1819 باز نشه صبر می‌کنه.
+/// اگه کاربر وسطش «لغو» بزنه، stop_aether پروسه رو می‌گیره و این تابع با خطای cancelled برمی‌گرده.
+#[tauri::command]
+async fn start_aether(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        kill_aether(&app);
+        cleanup_stale_aether(&app);
+        if port_live(AETHER_PORT) {
+            return Err(format!("port {AETHER_PORT} is already in use (close other Aether / proxy apps)"));
+        }
+        let exe = aether_path(&app)?;
+        // Aether هویت WARP (aether.toml) و آخرین گیت‌وی سالم رو توی پوشه‌ی کاریش نگه می‌داره؛
+        // ثابت بودن این پوشه یعنی دفعه‌های بعد اسکن کامل لازم نیست
+        let dir = data_dir(&app)?.join("aether");
+        fs::create_dir_all(&dir).map_err(err)?;
+        let log_path = dir.join("aether.log");
+        let log = Arc::new(Mutex::new(fs::File::create(&log_path).map_err(err)?));
+
+        let bind = format!("127.0.0.1:{AETHER_PORT}");
+        let mut cmd = Command::new(&exe);
+        cmd.current_dir(&dir)
+            .args([
+                "--wg",
+                "--balanced",
+                "-4",
+                "--noize",
+                "balanced",
+                "--quick-reconnect",
+                "--bind",
+                bind.as_str(),
+            ])
+            // معادل env همون فلگ‌ها؛ اگه نسخه‌ای فلگی رو نشناخت، سؤال باز هم پرسیده نمیشه
+            .env("AETHER_PROTOCOL", "wg")
+            .env("AETHER_SCAN", "balanced")
+            .env("AETHER_NOIZE", "balanced")
+            .env("AETHER_QUICK_RECONNECT", "1")
+            .env("AETHER_SOCKS", &bind)
+            .env("NO_COLOR", "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        hide(&mut cmd);
+        let mut child = cmd.spawn().map_err(err)?;
+
+        let a = app.state::<Aether>();
+        *a.stdin.lock().unwrap() = child.stdin.take();
+        if let Some(o) = child.stdout.take() {
+            pump_aether(app.clone(), o, log.clone(), a.stdin.clone());
+        }
+        if let Some(e) = child.stderr.take() {
+            pump_aether(app.clone(), e, log.clone(), a.stdin.clone());
+        }
+        if let Some(p) = aether_pid_file(&app) {
+            let _ = fs::write(p, child.id().to_string());
+        }
+        *a.child.lock().unwrap() = Some(child);
+
+        let start = Instant::now();
+        let mut last_sec = u64::MAX;
+        loop {
+            thread::sleep(Duration::from_millis(400));
+            let exited = {
+                let mut g = a.child.lock().unwrap();
+                match g.as_mut() {
+                    None => return Err("cancelled".into()),
+                    Some(c) => matches!(c.try_wait(), Ok(Some(_))),
+                }
+            };
+            if exited {
+                a.child.lock().unwrap().take();
+                *a.stdin.lock().unwrap() = None;
+                thread::sleep(Duration::from_millis(200)); // آخرین خطوط لاگ برسن
+                return Err(tail(&log_path));
+            }
+            if port_live(AETHER_PORT) {
+                return Ok(());
+            }
+            let sec = start.elapsed().as_secs();
+            if sec != last_sec {
+                last_sec = sec;
+                let _ = app.emit("aether-progress", sec);
+            }
+            if sec >= AETHER_TIMEOUT_SECS {
+                kill_aether(&app);
+                return Err("Aether could not find a working route (timeout)".into());
+            }
+        }
+    })
+    .await
+    .map_err(err)?
+}
+
+#[tauri::command]
+async fn stop_aether(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        kill_aether(&app);
+        Ok(())
+    })
+    .await
+    .map_err(err)?
+}
+
+#[tauri::command]
+fn aether_running(a: State<'_, Aether>) -> bool {
+    let mut g = a.child.lock().unwrap();
+    match g.as_mut() {
+        Some(c) => matches!(c.try_wait(), Ok(None)),
+        None => false,
     }
 }
 
@@ -490,6 +759,7 @@ fn relaunch_admin(app: AppHandle) -> Result<(), String> {
     let core = app.state::<Core>();
     kill_core(&core);
     let _ = set_proxy(&core, false, PROXY_PORT);
+    kill_aether(&app);
     let script = format!(
         "Start-Process -FilePath '{}' -ArgumentList '--elevated' -Verb RunAs",
         exe.display().to_string().replace('\'', "''")
@@ -670,8 +940,10 @@ fn main() {
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--autostart"])))
         .plugin(tauri_plugin_notification::init())
         .manage(Core::default())
+        .manage(Aether::default())
         .setup(move |app| {
             sysproxy::cleanup_stale(PROXY_PORT);
+            cleanup_stale_aether(app.handle());
             setup_tray(app)?;
             // پنجره مخفی ساخته میشه؛ اگه با ویندوز اجرا شده همون کنار ساعت می‌مونه
             if !autostarted {
@@ -703,7 +975,10 @@ fn main() {
             show_main,
             get_autostart,
             set_autostart,
-            notify
+            notify,
+            start_aether,
+            stop_aether,
+            aether_running
         ])
         .build(tauri::generate_context!())
         .expect("failed to start MahyarVPN")
@@ -712,6 +987,7 @@ fn main() {
                 let core = app.state::<Core>();
                 kill_core(&core);
                 let _ = set_proxy(&core, false, PROXY_PORT);
+                kill_aether(app);
             }
         });
 }
